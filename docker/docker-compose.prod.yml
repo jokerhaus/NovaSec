@@ -1,0 +1,55 @@
+# docker/docker-compose.prod.yml
+# Production configuration for NovaSec
+
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./init/clickhouse-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    environment:
+      - CLICKHOUSE_DB=novasec
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      - POSTGRES_DB=novasec
+      - POSTGRES_USER=novasec
+      - POSTGRES_PASSWORD=novasec123
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+  clickhouse-data:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,36 @@
+# docker/docker-compose.test.yml
+# Testing configuration for NovaSec
+
+version: '3.8'
+
+services:
+  nats-test:
+    image: nats:2.10-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    ports:
+      - "14222:4222"
+      - "18222:8222"
+
+  clickhouse-test:
+    image: clickhouse/clickhouse-server:23.8
+    environment:
+      - CLICKHOUSE_DB=novasec_test
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=novasec_test
+      - POSTGRES_USER=novasec
+      - POSTGRES_PASSWORD=novasec123
+    ports:
+      - "15432:5432"
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"

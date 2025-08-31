@@ -1,0 +1,94 @@
+# configs/ingest.example.yml
+# Конфигурация NovaSec Ingest Service
+
+# Настройки сервера
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "60s"
+
+# Настройки NATS
+nats:
+  urls:
+    - "nats://localhost:4222"
+  cluster_id: "novasec"
+  client_id: "novasec-ingest"
+  credentials: ""  # Путь к файлу учетных данных NATS
+  jwt: ""          # JWT токен для аутентификации
+  nkey: ""         # NKey для аутентификации
+  timeout: "30s"
+
+# Настройки ClickHouse
+clickhouse:
+  hosts:
+    - "localhost"
+  database: "novasec"
+  username: "default"
+  password: ""
+  port: 9000
+  secure: false
+  compress: true
+  max_open: 100
+  max_idle: 10
+  timeout: "30s"
+
+# Настройки PostgreSQL
+postgresql:
+  host: "localhost"
+  port: 5432
+  database: "novasec"
+  username: "novasec"
+  password: "novasec"
+  ssl_mode: "disable"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: "1h"
+
+# Настройки Redis
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""
+  db: 0
+  timeout: "5s"
+
+# Настройки логирования
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+  max_size: 100
+  max_backups: 3
+  max_age: 28
+  compress: true
+
+# Настройки TLS
+tls:
+  enabled: false
+  ca_file: "configs/tls/ca.crt"
+  cert_file: "configs/tls/ingest.crt"
+  key_file: "configs/tls/ingest.key"
+  min_version: "1.2"
+  client_auth: "require_and_verify"
+
+# Лимиты и ограничения
+limits:
+  max_body_size: "10MB"
+  max_events_per_request: 10000
+  rate_limit_per_minute: 1000
+  max_concurrent_requests: 100
+
+# Настройки агентов
+agents:
+  allowed_agent_ids: []  # Пустой список означает разрешены все
+  agent_timeout: "5m"
+  max_agent_connections: 1000
+
+# Настройки метрик
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+  collect_interval: "30s"

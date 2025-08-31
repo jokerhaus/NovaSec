@@ -1,0 +1,127 @@
+# internal/rules/login_bruteforce.yml
+# Правило для обнаружения брутфорс атак на SSH
+
+id: "login_bruteforce"
+name: "SSH Login Bruteforce Detection"
+description: "Обнаруживает множественные неудачные попытки входа по SSH с одного IP адреса"
+severity: "high"
+window: "5m"
+group_by: ["src_ip", "host"]
+threshold: 10
+suppress: "15m"
+actions: ["alert", "notify"]
+
+conditions:
+  - field: "category"
+    operator: "equals"
+    value: "auth"
+  
+  - field: "subtype"
+    operator: "equals"
+    value: "login"
+  
+  - field: "severity"
+    operator: "equals"
+    value: "high"
+  
+  - field: "message"
+    operator: "contains"
+    value: "Failed password"
+
+# Дополнительные параметры
+metadata:
+  tags: ["ssh", "bruteforce", "auth"]
+  references:
+    - "https://attack.mitre.org/techniques/T1110/"
+    - "https://attack.mitre.org/techniques/T1110/001/"
+  
+  # Настройки уведомлений
+  notifications:
+    email:
+      - "security@company.com"
+      - "admin@company.com"
+    telegram:
+      channel: "security-alerts"
+    webhook:
+      url: "https://webhook.company.com/security"
+      headers:
+        Authorization: "Bearer ${WEBHOOK_TOKEN}"
+
+# Логика подавления
+suppression:
+  enabled: true
+  window: "15m"
+  key_fields: ["src_ip", "host"]
+  max_alerts: 3
+
+# Эскалация
+escalation:
+  enabled: true
+  levels:
+    - threshold: 20
+      action: "block_ip"
+      notify: ["security-manager@company.com"]
+    - threshold: 50
+      action: "emergency_response"
+      notify: ["emergency@company.com", "oncall@company.com"]
+
+# Действия при срабатывании
+actions:
+  - type: "alert"
+    description: "Создать алерт в системе"
+  
+  - type: "notify"
+    description: "Отправить уведомления"
+  
+  - type: "log"
+    description: "Записать в лог безопасности"
+  
+  - type: "block"
+    description: "Блокировать IP адрес (если настроено)"
+
+# Тестовые данные
+test_data:
+  positive_cases:
+    - description: "10 неудачных попыток входа за 5 минут"
+      events:
+        - ts: "2024-01-15T10:00:00Z"
+          host: "server-01"
+          category: "auth"
+          subtype: "login"
+          severity: "high"
+          message: "Failed password for user admin from 192.168.1.100"
+          network:
+            src_ip: 3232235876  # 192.168.1.100
+        - ts: "2024-01-15T10:01:00Z"
+          host: "server-01"
+          category: "auth"
+          subtype: "login"
+          severity: "high"
+          message: "Failed password for user admin from 192.168.1.100"
+          network:
+            src_ip: 3232235876
+        # ... еще 8 событий
+  
+  negative_cases:
+    - description: "Менее 10 неудачных попыток"
+      events:
+        - ts: "2024-01-15T10:00:00Z"
+          host: "server-01"
+          category: "auth"
+          subtype: "login"
+          severity: "high"
+          message: "Failed password for user admin from 192.168.1.100"
+          network:
+            src_ip: 3232235876
+        # ... только 5 событий
+    
+    - description: "Успешные попытки входа"
+      events:
+        - ts: "2024-01-15T10:00:00Z"
+          host: "server-01"
+          category: "auth"
+          subtype: "login"
+          severity: "info"
+          message: "Accepted password for user admin from 192.168.1.100"
+          network:
+            src_ip: 3232235876

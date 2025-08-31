@@ -1,0 +1,46 @@
+# docker/docker-compose.override.yml
+# Development overrides for NovaSec
+
+version: '3.8'
+
+services:
+  novasec-ingest:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ingest
+    volumes:
+      - ../configs:/root/configs:ro
+      - ../logs:/root/logs
+
+  novasec-normalizer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.normalizer
+    volumes:
+      - ../configs:/root/configs:ro
+      - ../logs:/root/logs
+
+  novasec-correlator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.correlator
+    volumes:
+      - ../configs:/root/configs:ro
+      - ../logs:/root/logs
+      - ../internal/rules:/root/internal/rules:ro
+
+  novasec-alerting:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.alerting
+    volumes:
+      - ../configs:/root/configs:ro
+      - ../logs:/root/logs
+
+  novasec-adminapi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.adminapi
+    volumes:
+      - ../configs:/root/configs:ro
+      - ../logs:/root/logs

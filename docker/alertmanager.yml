@@ -1,0 +1,18 @@
+# docker/alertmanager.yml
+# Alertmanager Configuration for NovaSec
+
+global:
+  smtp_smarthost: 'localhost:25'
+  smtp_from: 'alertmanager@novasec.local'
+
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'web.hook'
+
+receivers:
+  - name: 'web.hook'
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/'

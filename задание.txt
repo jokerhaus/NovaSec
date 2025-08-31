@@ -1,0 +1,237 @@
+Ты — Senior Go Engineer + System Architect. Создай полноценный монорепозиторий с микросервисной архитектурой для собственной SIEM/HIDS-платформы «NovaSec» (условное имя), альтернативы Vazuh, но проще в установке и удобнее в использовании.
+
+Жёсткие требования оформления
+	1.	Никаких сокращений кода. Пиши полные файлы.
+	2.	В каждом файле первой строкой поставь комментарий с именем файла.
+	3.	Для каждого публичного метода укажи версию в комментарии, например // v1.0.
+	4.	В README распиши пошаговый запуск.
+	5.	Все конфиги — в configs/, примеры — *.example.yml.
+	6.	Все миграции и DDL — полные.
+	7.	Покрой ключевую логику тестами (go test), добавь фикстуры.
+	8.	Никаких placeholder-ов вида “TODO: implement”. Всё рабочее.
+
+Стек и модули
+	•	Язык: Go (1.22+), go mod с явными зависимостями.
+	•	Шина: NATS JetStream.
+	•	Хранилища: ClickHouse (события), PostgreSQL (метаданные).
+	•	API: REST (HTTP/2) + мTLS между агентом и Ingest.
+	•	Сериализация событий: NDJSON (ingest) + внутренний Go-struct.
+	•	UI не делай; вместо него — минимальные эндпоинты админ-API.
+
+Архитектура директорий novasec/
+  cmd/
+    ingest/
+      main.go
+    normalizer/
+      main.go
+    correlator/
+      main.go
+    alerting/
+      main.go
+    adminapi/
+      main.go
+  internal/
+    common/
+      config/
+      logging/
+      tls/
+      nats/
+      ch/
+      pg/
+      errors/
+    models/
+      event.go
+      alert.go
+      rule.go
+      suppression.go
+    ingest/
+      server.go
+      middleware.go
+    normalizer/
+      pipeline.go
+      parsers/
+        linux_auth.go
+        nginx_access.go
+        windows_eventlog.go
+    correlator/
+      engine.go
+      dsl/
+        compiler.go
+        evaluator.go
+        types.go
+      state/
+        redis.go   // интерфейс state, реализация in-memory + Postgres
+        memory.go
+    alerting/
+      router.go
+      channels/
+        email.go
+        telegram.go
+        webhook.go
+    adminapi/
+      server.go
+      routes/
+        alerts.go
+        rules.go
+        health.go
+    migrations/
+      clickhouse/
+        001_events.sql
+      postgres/
+        001_meta.sql
+        002_alerts.sql
+        003_rules.sql
+        004_suppressions.sql
+    rules/
+      login_bruteforce.yml
+      fim_critical.yml
+    fixtures/
+      ssh_11_failed.jsonl
+      ssh_9_failed.jsonl
+  configs/
+    ingest.example.yml
+    services.example.yml
+    tls/
+      README.md
+  docker/
+    docker-compose.yml
+    init/
+      clickhouse-init.sh
+      postgres-init.sql
+  scripts/
+    gen-certs.sh
+  Makefile
+  README.md
+  LICENSE Модель события (единый контракт)
+
+Определи internal/models/event.go со структурой:
+	•	ts (time.Time, миллисекундная точность)
+	•	host, agent_id, env, source, severity (string)
+	•	category, subtype (string)
+	•	message (string)
+	•	user (вложенная структура: name, uid *int)
+	•	network (src_ip, src_port *int, dst_ip, dst_port *int, proto string)
+	•	file (path string)
+	•	process (pid *int, name string)
+	•	hashes (sha256 string)
+	•	labels (map[string]string)
+	•	enrich (geo string, asn *int, ioc string)
+	•	raw (string)
+
+Конструктор парсит NDJSON строку в Event с валидацией обязательных полей.
+
+Ingest сервис
+	•	HTTP/2 + mTLS, эндпоинт POST /api/v1/ingest принимает NDJSON (много событий).
+	•	Заголовки: X-Agent-Id.
+	•	Ответ: 202 Accepted + JSON { "ok": true, "received": N }.
+	•	Каждое событие публикуется в NATS JetStream subject events.raw.
+	•	Валидация: ts, host, category, subtype, message обязательны.
+	•	Rate-limit + body size limit + request id логирование.
+
+Normalizer сервис
+	•	Подписывается на events.raw.
+	•	Приводит события к единой схеме, заполняет category/subtype если нужно, добавляет базовые labels.
+	•	Встроенные парсеры:
+	•	linux_auth (неуспешные ssh-логины),
+	•	nginx_access (4xx/5xx),
+	•	windows_eventlog (успех/неудача входа).
+	•	Пишет нормализованные события в ClickHouse в таблицу events и публикует в events.normalized.
+
+Correlator сервис
+	•	Подписка на events.normalized.
+	•	Реализуй DSL правил (YAML): окна времени, group_by, count/uniq, suppress (dedup), действия.
+	•	Компилятор DSL → исполняемая структура.
+	•	Состояние окон: in-memory + Postgres fallback.
+	•	Пример правил положи в internal/rules/:
+	1.	login_bruteforce.yml: за 5 минут ≥10 неудачных ssh-логинов по src_ip+host → alert high, suppress 15m.
+	2.	fim_critical.yml: любое изменение /etc/shadow или /etc/sudoers → alert critical, suppress 2m по host+file.path+hashes.sha256.
+	•	Результат алерта: публикуется в alerts.created и сохраняется в Postgres таблицу alerts.
+
+Alerting сервис
+	•	Подписка на alerts.created.
+	•	Маршрутизация по severity/env/labels.team.
+	•	Каналы:
+	•	Email (SMTP конфиг в configs/services.yml),
+	•	Telegram (Bot API токен, канал),
+	•	Webhook (URL, таймаут).
+	•	Дедуп ключ: rule_id + group_by_values + severity. Учитывай suppress окна из correlator.
+
+Admin API
+	•	HTTP/1.1 (можно h2c), без mTLS.
+	•	Эндпоинты:
+	•	GET /api/v1/health → OK.
+	•	GET /api/v1/alerts?from=&to=&severity=&rule_id=&status=&env=&cursor= → страничная выдача из Postgres.
+	•	GET /api/v1/rules → список правил (из Postgres).
+	•	POST /api/v1/rules → загрузка YAML правила, валидация, компиляция, сохранение.
+	•	POST /api/v1/rules/test → прогон тест-кейсов: принимает events_fixture (путь к .jsonl) и rule_id, возвращает количество сработок.
+	•	Добавь примеры curl в README.
+
+ClickHouse DDL (полные файлы в internal/migrations/clickhouse/001_events.sql)
+
+Создай БД novasec, таблицу events (MergeTree):
+	•	партиционирование по toDate(ts),
+	•	ORDER BY (env, category, subtype, host, ts),
+	•	поля: согласно модели (типизируй IPv4/IPv6 строками для простоты), json (сериализованный оригинал), raw (String),
+	•	TTL: 180 дней.
+
+PostgreSQL DDL (полные файлы)
+	•	001_meta.sql: таблицы agents, integrations.
+	•	002_alerts.sql: alerts(id uuid pk, ts timestamptz, rule_id text, severity text, dedup_key text, payload jsonb, status text, env text, host text, created_at timestamptz, updated_at timestamptz), индексы по ts, rule_id, severity, dedup_key.
+	•	003_rules.sql: rules(id text pk, name text, version int, yaml text, enabled bool, created_at timestamptz, updated_at timestamptz).
+	•	004_suppressions.sql: suppressions(rule_id text, key_hash text, until timestamptz, primary key(rule_id, key_hash)).
+
+Конфиги (полные примеры)
+	•	configs/ingest.example.yml: addr, tls (ca, cert, key), nats url/creds, limits.
+	•	configs/services.example.yml: подключения к NATS/CH/PG, SMTP, Telegram, вебхуки, правила suppress по умолчанию.
+	•	configs/tls/README.md: как сгенерировать CA и клиентские сертификаты.
+	•	Скрипт scripts/gen-certs.sh для локального dev CA.
+
+docker-compose (docker/docker-compose.yml)
+
+Подними:
+	•	nats (JetStream),
+	•	clickhouse (server + init script),
+	•	postgres (с init SQL),
+	•	novasec-ingest, novasec-normalizer, novasec-correlator, novasec-alerting, novasec-adminapi.
+Проброси конфиги и сети, задай sensible resources/healthchecks.
+В docker/init положи скрипты инициализации.
+
+Makefile
+
+Цели:
+	•	make deps — установка/обновление зависимостей.
+	•	make build — сборка всех сервисов.
+	•	make run — локальный запуск через docker-compose.
+	•	make test — запуск go-тестов.
+	•	make migrate — применение миграций ClickHouse и Postgres.
+
+Тесты
+	•	Юнит-тесты для:
+	•	нормализации парсеров (linux_auth/nginx/windows),
+	•	компилятора DSL и движка окон (count/uniq/group_by/suppress),
+	•	дедупликации алертов.
+	•	Фикстуры: fixtures/ssh_11_failed.jsonl, fixtures/ssh_9_failed.jsonl.
+	•	Тест Admin API /rules/test с использованием фикстур.
+
+README.md
+
+Опиши:
+	1.	Назначение проекта.
+	2.	Схему потоков: Agent/Collector → Ingest → NATS → Normalizer → ClickHouse → Correlator → Alerting → Admin API.
+	3.	Быстрый старт:
+	•	make deps && make build
+	•	make run
+	•	пример curl на /api/v1/ingest с NDJSON,
+	•	проверка алертов через /api/v1/alerts.
+	4.	Как добавлять новое правило (YAML) и тестировать /rules/test.
+	5.	Политика ротации/TTL и ретеншена.
+
+Лицензия
+
+Добавь LICENSE (MIT).
+
+Всё сгенерируй сразу, полными файлами, без пропусков, соблюдая структуру и требования выше.
+
+⸻
+
+Если где-то нужны сертификаты для mTLS — положи инструкции и авто-скрипт; если требуется ENV — добавь .env.example и используй переменные с дефолтами в примерах.

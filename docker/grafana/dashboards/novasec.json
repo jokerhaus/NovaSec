@@ -1,0 +1,32 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "NovaSec Overview",
+    "tags": ["novasec", "siem"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Events per Second",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(novasec_events_total[5m])",
+            "legendFormat": "Events/sec"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Alerts",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "novasec_alerts_total",
+            "legendFormat": "Total Alerts"
+          }
+        ]
+      }
+    ]
+  }
+}

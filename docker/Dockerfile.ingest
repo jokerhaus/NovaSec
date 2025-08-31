@@ -1,0 +1,43 @@
+# docker/Dockerfile.ingest
+# Dockerfile для NovaSec Ingest Service
+
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Копируем go mod файлы
+COPY go.mod go.sum ./
+
+# Скачиваем зависимости
+RUN go mod download
+
+# Копируем исходный код
+COPY . .
+
+# Собираем приложение
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o novasec-ingest ./cmd/ingest
+
+# Финальный образ
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /root/
+
+# Копируем бинарный файл
+COPY --from=builder /app/novasec-ingest .
+
+# Копируем конфигурацию
+COPY --from=builder /app/configs ./configs
+
+# Создаем директории для логов
+RUN mkdir -p /root/logs
+
+# Устанавливаем права
+RUN chmod +x novasec-ingest
+
+# Открываем порт
+EXPOSE 8080
+
+# Запускаем приложение
+CMD ["./novasec-ingest", "-config", "./configs/ingest.yml"]

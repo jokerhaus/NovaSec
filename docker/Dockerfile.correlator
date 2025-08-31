@@ -1,0 +1,24 @@
+# docker/Dockerfile.correlator
+# Dockerfile для NovaSec Correlator Service
+
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o novasec-correlator ./cmd/correlator
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /root/
+COPY --from=builder /app/novasec-correlator .
+COPY --from=builder /app/configs ./configs
+COPY --from=builder /app/internal/rules ./internal/rules
+RUN mkdir -p /root/logs
+RUN chmod +x novasec-correlator
+
+CMD ["./novasec-correlator", "-config", "./configs/services.yml"]
