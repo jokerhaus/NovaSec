@@ -49,7 +49,7 @@ func NewService(cfg *config.Config, logger *logging.Logger) *Service {
 	}
 
 	// Создаем HTTP сервер
-	httpServer := server.NewServer(serverConfig, logger)
+	httpServer := server.NewServer(serverConfig, logger, nil) // pgClient будет инициализирован позже
 
 	service := &Service{
 		config:     cfg,
@@ -62,6 +62,11 @@ func NewService(cfg *config.Config, logger *logging.Logger) *Service {
 
 	// Инициализируем клиенты для работы с сервисами
 	service.initClients()
+
+	// Обновляем сервер с инициализированными клиентами
+	if service.pgClient != nil {
+		service.server = server.NewServer(serverConfig, logger, service.pgClient)
+	}
 
 	return service
 }

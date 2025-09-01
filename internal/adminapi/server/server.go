@@ -10,16 +10,18 @@ import (
 
 	"novasec/internal/adminapi/routes"
 	"novasec/internal/common/logging"
+	"novasec/internal/common/pg"
 
 	"github.com/gin-gonic/gin"
 )
 
 // Server представляет HTTP сервер Admin API // v1.0
 type Server struct {
-	config *Config
-	logger *logging.Logger
-	router *gin.Engine
-	server *http.Server
+	config   *Config
+	logger   *logging.Logger
+	router   *gin.Engine
+	server   *http.Server
+	pgClient *pg.Client
 }
 
 // Config конфигурация сервера // v1.0
@@ -33,7 +35,7 @@ type Config struct {
 }
 
 // NewServer создает новый HTTP сервер // v1.0
-func NewServer(config *Config, logger *logging.Logger) *Server {
+func NewServer(config *Config, logger *logging.Logger, pgClient *pg.Client) *Server {
 	// Устанавливаем уровень логирования Gin
 	if config.LogLevel == "debug" {
 		gin.SetMode(gin.DebugMode)
@@ -50,9 +52,10 @@ func NewServer(config *Config, logger *logging.Logger) *Server {
 	router.Use(rateLimitMiddleware())
 
 	server := &Server{
-		config: config,
-		logger: logger,
-		router: router,
+		config:   config,
+		logger:   logger,
+		router:   router,
+		pgClient: pgClient,
 	}
 
 	// Настраиваем роуты
@@ -74,8 +77,8 @@ func NewServer(config *Config, logger *logging.Logger) *Server {
 func (s *Server) setupRoutes() {
 	// Создаем обработчики
 	healthHandler := routes.NewHealthHandler(s.logger)
-	alertsHandler := routes.NewAlertsHandler(s.logger)
-	rulesHandler := routes.NewRulesHandler(s.logger)
+	alertsHandler := routes.NewAlertsHandler(s.logger, s.pgClient)
+	rulesHandler := routes.NewRulesHandler(s.logger, s.pgClient)
 
 	// API v1
 	v1 := s.router.Group("/api/v1")

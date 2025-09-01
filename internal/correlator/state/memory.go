@@ -34,6 +34,8 @@ func (m *MemoryStateManager) GetWindowState(ruleID, groupKey string) (*dsl.Windo
 	if !exists {
 		// Создаем новое состояние окна
 		window = &dsl.WindowState{
+			RuleID:      ruleID,
+			GroupKey:    groupKey,
 			StartTime:   time.Now(),
 			EndTime:     time.Now().Add(5 * time.Minute), // Дефолтное окно 5 минут
 			EventCount:  0,

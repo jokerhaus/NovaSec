@@ -253,6 +253,11 @@ func ParseIPPort(ipPort string) (string, int, error) {
 		return "", 0, fmt.Errorf("invalid IP:port format: %s", ipPort)
 	}
 
+	// Проверяем, что IP не пустой
+	if parts[0] == "" {
+		return "", 0, fmt.Errorf("invalid IP:port format: missing IP address")
+	}
+
 	port, err := strconv.Atoi(parts[1])
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid port: %s", parts[1])

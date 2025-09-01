@@ -55,7 +55,7 @@ func main() {
 	defer natsClient.Close()
 
 	// Create alerting service
-	alertingService := alerting.NewService(cfg, logger, natsClient)
+	alertingService := alerting.NewService(logger, natsClient, cfg)
 
 	// Start service
 	ctx, cancel := context.WithCancel(context.Background())

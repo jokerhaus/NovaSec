@@ -172,6 +172,12 @@ func TestEventMethods(t *testing.T) {
 		t.Error("AddLabel() failed to add label")
 	}
 
+	// Test GetLabel with existing key
+	labelValue := event.GetLabel("test_key")
+	if labelValue != "test_value" {
+		t.Errorf("GetLabel() = %v, want %v", labelValue, "test_value")
+	}
+
 	// Test AddLabel with nil Labels
 	event.Labels = nil
 	event.AddLabel("new_key", "new_value")
@@ -182,10 +188,10 @@ func TestEventMethods(t *testing.T) {
 		t.Error("AddLabel() failed to add label after initialization")
 	}
 
-	// Test GetLabel
-	labelValue := event.GetLabel("test_key")
-	if labelValue != "test_value" {
-		t.Errorf("GetLabel() = %v, want %v", labelValue, "test_value")
+	// Test GetLabel with newly added key
+	labelValue = event.GetLabel("new_key")
+	if labelValue != "new_value" {
+		t.Errorf("GetLabel() = %v, want %v", labelValue, "new_value")
 	}
 
 	// Test GetLabel with nil Labels

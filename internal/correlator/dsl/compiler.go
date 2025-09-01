@@ -26,6 +26,17 @@ func NewCompiler() *Compiler {
 
 // CompileRule компилирует правило в исполняемую структуру // v1.0
 func (c *Compiler) CompileRule(rule *Rule) (*CompiledRule, error) {
+	// Проверяем кэш
+	if cached, exists := c.compiledRules[rule.ID]; exists {
+		// Проверяем, изменилось ли правило
+		if c.isRuleChanged(rule, cached.Rule) {
+			// Правило изменилось, перекомпилируем
+		} else {
+			// Правило не изменилось, возвращаем кэшированное
+			return cached, nil
+		}
+	}
+
 	// Валидируем правило
 	if err := ValidateRule(rule); err != nil {
 		return nil, fmt.Errorf("rule validation failed: %w", err)
@@ -362,3 +373,60 @@ func (m *CompositeEventMatcher) compareNumeric(actual, operator, expected string
 }
 
 // Дублирующиеся определения SlidingWindowEvaluator удалены. Используется реализация из evaluator.go
+
+// isRuleChanged проверяет, изменилось ли правило // v1.0
+func (c *Compiler) isRuleChanged(newRule, oldRule *Rule) bool {
+	// Простая проверка по имени и описанию
+	if newRule.Name != oldRule.Name {
+		return true
+	}
+	if newRule.Description != oldRule.Description {
+		return true
+	}
+	if newRule.Severity != oldRule.Severity {
+		return true
+	}
+	if newRule.Enabled != oldRule.Enabled {
+		return true
+	}
+
+	// Проверяем Window конфигурацию
+	if newRule.Window.Duration != oldRule.Window.Duration {
+		return true
+	}
+	if newRule.Window.Sliding != oldRule.Window.Sliding {
+		return true
+	}
+
+	// Проверяем Threshold конфигурацию
+	if newRule.Threshold.Count != oldRule.Threshold.Count {
+		return true
+	}
+	if newRule.Threshold.Type != oldRule.Threshold.Type {
+		return true
+	}
+	if newRule.Threshold.Field != oldRule.Threshold.Field {
+		return true
+	}
+
+	// Проверяем Suppress конфигурацию
+	if newRule.Suppress.Duration != oldRule.Suppress.Duration {
+		return true
+	}
+	if newRule.Suppress.Key != oldRule.Suppress.Key {
+		return true
+	}
+
+	// Проверяем количество условий и действий
+	if len(newRule.Conditions) != len(oldRule.Conditions) {
+		return true
+	}
+	if len(newRule.Actions) != len(oldRule.Actions) {
+		return true
+	}
+
+	// TODO: Добавить более детальную проверку условий и действий
+	// Пока считаем, что если количество изменилось, то правило изменилось
+
+	return false
+}

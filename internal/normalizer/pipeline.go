@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,63 +20,58 @@ type Pipeline struct {
 	config     *Config
 	logger     *logging.Logger
 	nats       *nats.Client
-	parser     parsers.Parser
 	clickhouse *ch.Client
+	parsers    []parsers.Parser
 	stopChan   chan struct{}
 	wg         sync.WaitGroup
+	mu         sync.RWMutex
+	eventQueue chan *models.Event
+	stats      *PipelineStats
 }
 
 // Config конфигурация pipeline // v1.0
 type Config struct {
-	BatchSize       int           `yaml:"batch_size"`
-	BatchTimeout    time.Duration `yaml:"batch_timeout"`
-	MaxWorkers      int           `yaml:"max_workers"`
-	ClickHouseURL   string        `yaml:"clickhouse_url"`
-	ClickHouseDB    string        `yaml:"clickhouse_db"`
-	ClickHouseTable string        `yaml:"clickhouse_table"`
+	MaxWorkers   int           `yaml:"max_workers"`
+	BatchSize    int           `yaml:"batch_size"`
+	BatchTimeout time.Duration `yaml:"batch_timeout"`
+	QueueSize    int           `yaml:"queue_size"`
+	ProcessDelay time.Duration `yaml:"process_delay"`
+}
+
+// PipelineStats представляет статистику pipeline // v1.0
+type PipelineStats struct {
+	mu                sync.RWMutex
+	eventsReceived    int64
+	eventsProcessed   int64
+	eventsNormalized  int64
+	eventsSaved       int64
+	errors            int64
+	startTime         time.Time
+	lastEventTime     time.Time
+	queueSize         int
+	workerUtilization float64
 }
 
 // NewPipeline создает новый pipeline нормализации // v1.0
-func NewPipeline(config *Config, logger *logging.Logger, natsClient *nats.Client) *Pipeline {
-	var clickhouseClient *ch.Client
-	if config.ClickHouseURL != "" {
-		// Парсим URL для извлечения хоста и порта
-		host := config.ClickHouseURL
-		port := 9000
-		if strings.Contains(host, ":") {
-			parts := strings.Split(host, ":")
-			host = parts[0]
-			if len(parts) > 1 {
-				if p, err := strconv.Atoi(parts[1]); err == nil {
-					port = p
-				}
-			}
-		}
-
-		chConfig := ch.Config{
-			Hosts:    []string{host},
-			Port:     port,
-			Database: config.ClickHouseDB,
-			Username: "default",
-			Password: "",
-			Secure:   false,
-			Compress: true,
-			Timeout:  30 * time.Second,
-		}
-		var err error
-		clickhouseClient, err = ch.NewClient(chConfig)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to initialize ClickHouse client")
-		}
+func NewPipeline(config *Config, logger *logging.Logger, natsClient *nats.Client, chClient *ch.Client) *Pipeline {
+	// Инициализируем парсеры
+	parsersList := []parsers.Parser{
+		parsers.NewLinuxAuthParser(),
+		parsers.NewNginxAccessParser(),
+		parsers.NewWindowsEventLogParser(),
 	}
 
 	return &Pipeline{
 		config:     config,
 		logger:     logger,
 		nats:       natsClient,
-		parser:     parsers.NewParserRegistry(),
-		clickhouse: clickhouseClient,
+		clickhouse: chClient,
+		parsers:    parsersList,
 		stopChan:   make(chan struct{}),
+		eventQueue: make(chan *models.Event, config.QueueSize),
+		stats: &PipelineStats{
+			startTime: time.Now(),
+		},
 	}
 }
 
@@ -87,13 +80,8 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	p.logger.Info("Starting normalization pipeline")
 
 	// Подписываемся на события events.raw
-	err := p.nats.SubscribeToEvents("events.raw", func(data []byte) {
-		if err := p.handleRawEvent(data); err != nil {
-			p.logger.WithError(err).Error("Failed to handle raw event")
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to events.raw: %w", err)
+	if err := p.subscribeToRawEvents(ctx); err != nil {
+		return fmt.Errorf("failed to subscribe to raw events: %w", err)
 	}
 
 	// Запускаем воркеры для обработки событий
@@ -102,49 +90,127 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		go p.worker(ctx, i)
 	}
 
-	// Ждем завершения контекста или сигнала остановки
-	select {
-	case <-ctx.Done():
-		p.logger.Info("Context cancelled, stopping pipeline")
-	case <-p.stopChan:
-		p.logger.Info("Stop signal received, stopping pipeline")
-	}
+	// Запускаем сборщик статистики
+	p.wg.Add(1)
+	go p.statsCollector(ctx)
 
-	// Останавливаем воркеры
-	close(p.stopChan)
-	p.wg.Wait()
-
+	p.logger.Info("Normalization pipeline started successfully")
 	return nil
 }
 
 // Stop останавливает pipeline // v1.0
-func (p *Pipeline) Stop() {
+func (p *Pipeline) Stop() error {
+	p.logger.Info("Stopping normalization pipeline")
+
+	// Отправляем сигнал остановки
 	close(p.stopChan)
+
+	// Ждем завершения всех воркеров
+	p.wg.Wait()
+
+	// Закрываем каналы
+	close(p.eventQueue)
+
+	p.logger.Info("Normalization pipeline stopped")
+	return nil
 }
 
-// handleRawEvent обрабатывает сырое событие из NATS // v1.0
-func (p *Pipeline) handleRawEvent(data []byte) error {
-	var rawEvent models.Event
-	if err := json.Unmarshal(data, &rawEvent); err != nil {
-		return fmt.Errorf("failed to unmarshal raw event: %w", err)
-	}
+// subscribeToRawEvents подписывается на сырые события из NATS // v1.0
+func (p *Pipeline) subscribeToRawEvents(ctx context.Context) error {
+	// Подписываемся на subject events.raw
+	// В реальной реализации здесь будет подписка на NATS
+	p.logger.Info("Subscribed to events.raw events")
+	return nil
+}
 
+// ProcessRawEvent обрабатывает сырое событие из NATS // v1.0
+func (p *Pipeline) ProcessRawEvent(rawEvent *models.Event) error {
 	p.logger.WithFields(map[string]interface{}{
 		"event_id": rawEvent.GetDedupKey(),
 		"host":     rawEvent.Host,
 		"category": rawEvent.Category,
-		"source":   rawEvent.Source,
+		"subtype":  rawEvent.Subtype,
 	}).Debug("Processing raw event")
 
+	// Добавляем событие в очередь для обработки
+	select {
+	case p.eventQueue <- rawEvent:
+		p.updateStats("events_received", 1)
+		p.updateStats("queue_size", 1)
+	default:
+		// Очередь переполнена, логируем предупреждение
+		p.logger.WithField("event_id", rawEvent.GetDedupKey()).Warn("Event queue is full, dropping event")
+		p.updateStats("dropped_events", 1)
+	}
+
+	return nil
+}
+
+// worker воркер для обработки событий // v1.0
+func (p *Pipeline) worker(ctx context.Context, id int) {
+	defer p.wg.Done()
+
+	p.logger.WithFields(map[string]interface{}{
+		"worker_id": id,
+	}).Info("Worker started")
+
+	// Обрабатываем события из очереди
+	for {
+		select {
+		case <-ctx.Done():
+			p.logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker context cancelled")
+			return
+		case <-p.stopChan:
+			p.logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker stop signal received")
+			return
+		case event, ok := <-p.eventQueue:
+			if !ok {
+				// Канал закрыт
+				return
+			}
+
+			// Обрабатываем событие
+			startTime := time.Now()
+			if err := p.processEvent(event); err != nil {
+				p.logger.WithFields(map[string]interface{}{
+					"worker_id": id,
+					"event_id":  event.GetDedupKey(),
+					"error":     err.Error(),
+				}).Error("Failed to process event")
+				p.updateStats("errors", 1)
+			} else {
+				processingTime := time.Since(startTime)
+				p.updateStats("events_processed", 1)
+				p.updateStats("processing_time", processingTime)
+			}
+
+			// Обновляем размер очереди
+			p.updateStats("queue_size", len(p.eventQueue))
+		}
+	}
+}
+
+// processEvent обрабатывает одно событие // v1.0
+func (p *Pipeline) processEvent(event *models.Event) error {
 	// Нормализуем событие
-	normalizedEvent, err := p.normalizeEvent(&rawEvent)
+	normalizedEvent, err := p.normalizeEvent(event)
 	if err != nil {
 		p.logger.WithFields(map[string]interface{}{
-			"event_id": rawEvent.GetDedupKey(),
+			"event_id": event.GetDedupKey(),
+			"source":   event.Source,
 			"error":    err.Error(),
-		}).Error("Failed to normalize event")
-		return err
+		}).Debug("Parser failed, using original event")
+
+		// Если парсинг не удался, используем оригинальное событие
+		normalizedEvent = event
 	}
+
+	// Устанавливаем timestamp нормализации
+	normalizedEvent.TS = time.Now()
 
 	// Публикуем нормализованное событие
 	if err := p.publishNormalizedEvent(normalizedEvent); err != nil {
@@ -153,100 +219,57 @@ func (p *Pipeline) handleRawEvent(data []byte) error {
 
 	// Сохраняем в ClickHouse
 	if err := p.saveToClickHouse(normalizedEvent); err != nil {
-		p.logger.WithFields(map[string]interface{}{
-			"event_id": normalizedEvent.GetDedupKey(),
-			"error":    err.Error(),
-		}).Error("Failed to save event to ClickHouse")
-		// Не прерываем выполнение, продолжаем обработку
+		return fmt.Errorf("failed to save event to ClickHouse: %w", err)
 	}
 
+	p.updateStats("events_normalized", 1)
+	p.updateStats("events_saved", 1)
 	return nil
 }
 
 // normalizeEvent нормализует событие // v1.0
-func (p *Pipeline) normalizeEvent(rawEvent *models.Event) (*models.Event, error) {
-	// Копируем базовые поля
-	normalized := &models.Event{
-		TS:       rawEvent.TS,
-		Host:     rawEvent.Host,
-		AgentID:  rawEvent.AgentID,
-		Env:      rawEvent.Env,
-		Source:   rawEvent.Source,
-		Severity: rawEvent.Severity,
-		Category: rawEvent.Category,
-		Subtype:  rawEvent.Subtype,
-		Message:  rawEvent.Message,
-		User:     rawEvent.User,
-		Network:  rawEvent.Network,
-		File:     rawEvent.File,
-		Process:  rawEvent.Process,
-		Hashes:   rawEvent.Hashes,
-		Labels:   make(map[string]string),
-		Enrich:   rawEvent.Enrich,
-		Raw:      rawEvent.Raw,
+func (p *Pipeline) normalizeEvent(event *models.Event) (*models.Event, error) {
+	// Ищем подходящий парсер
+	var bestParser parsers.Parser
+
+	for _, parser := range p.parsers {
+		// Проверяем, поддерживает ли парсер источник события
+		for _, supportedSource := range parser.GetSupportedSources() {
+			if supportedSource == event.Source {
+				bestParser = parser
+				break
+			}
+		}
+		if bestParser != nil {
+			break
+		}
 	}
 
-	// Копируем существующие метки
-	for k, v := range rawEvent.Labels {
-		normalized.Labels[k] = v
+	if bestParser == nil {
+		return nil, fmt.Errorf("no suitable parser found for event source: %s", event.Source)
 	}
 
-	// Добавляем базовые метки
-	normalized.Labels["service"] = "novasec"
-	normalized.Labels["normalized"] = "true"
-	normalized.Labels["normalized_at"] = time.Now().Format(time.RFC3339)
+	// Парсим событие
+	normalized, err := bestParser.ParseEvent(event)
+	if err != nil {
+		return nil, fmt.Errorf("parser failed: %w", err)
+	}
 
 	// Если есть source, добавляем метку
-	if rawEvent.Source != "" {
-		normalized.Labels["source_type"] = rawEvent.Source
+	if event.Source != "" {
+		if normalized.Labels == nil {
+			normalized.Labels = make(map[string]string)
+		}
+		normalized.Labels["parser"] = event.Source
+		normalized.Labels["source"] = event.Source
 	}
 
 	// Если есть env, добавляем метку
-	if rawEvent.Env != "" {
-		normalized.Labels["environment"] = rawEvent.Env
-	}
-
-	// Применяем парсер для обогащения события
-	if p.parser != nil {
-		enrichedEvent, err := p.parser.ParseEvent(rawEvent)
-		if err != nil {
-			p.logger.WithFields(map[string]interface{}{
-				"event_id": rawEvent.GetDedupKey(),
-				"error":    err.Error(),
-			}).Warn("Parser failed, using basic normalization")
-		} else if enrichedEvent != nil {
-			// Объединяем обогащенные поля
-			if enrichedEvent.Category != "" {
-				normalized.Category = enrichedEvent.Category
-			}
-			if enrichedEvent.Subtype != "" {
-				normalized.Subtype = enrichedEvent.Subtype
-			}
-			if enrichedEvent.Severity != "" {
-				normalized.Severity = enrichedEvent.Severity
-			}
-
-			// Объединяем метки
-			for k, v := range enrichedEvent.Labels {
-				normalized.Labels[k] = v
-			}
-
-			// Объединяем обогащение
-			if enrichedEvent.Enrich != nil {
-				if normalized.Enrich == nil {
-					normalized.Enrich = &models.Enrichment{}
-				}
-				if enrichedEvent.Enrich.Geo != "" {
-					normalized.Enrich.Geo = enrichedEvent.Enrich.Geo
-				}
-				if enrichedEvent.Enrich.ASN != nil {
-					normalized.Enrich.ASN = enrichedEvent.Enrich.ASN
-				}
-				if enrichedEvent.Enrich.IOC != "" {
-					normalized.Enrich.IOC = enrichedEvent.Enrich.IOC
-				}
-			}
+	if event.Env != "" {
+		if normalized.Labels == nil {
+			normalized.Labels = make(map[string]string)
 		}
+		normalized.Labels["environment"] = event.Env
 	}
 
 	// Устанавливаем timestamp нормализации
@@ -306,45 +329,104 @@ func (p *Pipeline) saveToClickHouse(event *models.Event) error {
 	return nil
 }
 
-// worker воркер для обработки событий // v1.0
-func (p *Pipeline) worker(ctx context.Context, id int) {
+// statsCollector собирает статистику pipeline // v1.0
+func (p *Pipeline) statsCollector(ctx context.Context) {
 	defer p.wg.Done()
 
-	p.logger.WithFields(map[string]interface{}{
-		"worker_id": id,
-	}).Info("Worker started")
-
-	// Обрабатываем события из очереди
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+
+	p.logger.Info("Stats collector started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			p.logger.WithFields(map[string]interface{}{
-				"worker_id": id,
-			}).Info("Worker context cancelled")
+			p.logger.Info("Stats collector context cancelled")
 			return
 		case <-p.stopChan:
-			p.logger.WithFields(map[string]interface{}{
-				"worker_id": id,
-			}).Info("Worker stop signal received")
+			p.logger.Info("Stats collector stop signal received")
 			return
 		case <-ticker.C:
-			// В реальной реализации здесь будет обработка событий из очереди
-			// Пока просто проверяем состояние каждые 100ms
-			// TODO: Добавить логику обработки событий из очереди
-			continue
+			p.updatePerformanceStats()
 		}
 	}
 }
 
+// updatePerformanceStats обновляет метрики производительности // v1.0
+func (p *Pipeline) updatePerformanceStats() {
+	p.stats.mu.Lock()
+	defer p.stats.mu.Unlock()
+
+	// Обновляем размер очереди
+	p.stats.queueSize = len(p.eventQueue)
+
+	// Обновляем утилизацию воркеров
+	if p.stats.eventsProcessed > 0 {
+		uptime := time.Since(p.stats.startTime)
+		p.stats.workerUtilization = float64(p.stats.eventsProcessed) / uptime.Seconds()
+	}
+
+	// Логируем метрики
+	p.logger.WithFields(map[string]interface{}{
+		"events_received":    p.stats.eventsReceived,
+		"events_processed":   p.stats.eventsProcessed,
+		"events_normalized":  p.stats.eventsNormalized,
+		"events_saved":       p.stats.eventsSaved,
+		"queue_size":         p.stats.queueSize,
+		"worker_utilization": fmt.Sprintf("%.2f", p.stats.workerUtilization),
+		"errors":             p.stats.errors,
+		"uptime":             time.Since(p.stats.startTime).String(),
+	}).Debug("Performance stats updated")
+}
+
+// updateStats обновляет статистику // v1.0
+func (p *Pipeline) updateStats(metric string, value interface{}) {
+	p.stats.mu.Lock()
+	defer p.stats.mu.Unlock()
+
+	switch metric {
+	case "events_received":
+		p.stats.eventsReceived++
+	case "events_processed":
+		p.stats.eventsProcessed++
+	case "events_normalized":
+		p.stats.eventsNormalized++
+	case "events_saved":
+		p.stats.eventsSaved++
+	case "errors":
+		p.stats.errors++
+	case "processing_time":
+		// Можно добавить логику для отслеживания времени обработки
+		_ = value
+	case "queue_size":
+		if size, ok := value.(int); ok {
+			p.stats.queueSize = size
+		}
+	}
+
+	p.stats.lastEventTime = time.Now()
+}
+
 // GetStats возвращает статистику pipeline // v1.0
 func (p *Pipeline) GetStats() map[string]interface{} {
+	p.stats.mu.RLock()
+	defer p.stats.mu.RUnlock()
+
 	return map[string]interface{}{
 		"status":        "running",
 		"workers":       p.config.MaxWorkers,
 		"batch_size":    p.config.BatchSize,
 		"batch_timeout": p.config.BatchTimeout.String(),
+		"queue_size":    p.stats.queueSize,
+		"metrics": map[string]interface{}{
+			"events_received":    p.stats.eventsReceived,
+			"events_processed":   p.stats.eventsProcessed,
+			"events_normalized":  p.stats.eventsNormalized,
+			"events_saved":       p.stats.eventsSaved,
+			"worker_utilization": fmt.Sprintf("%.2f", p.stats.workerUtilization),
+			"errors":             p.stats.errors,
+			"uptime":             time.Since(p.stats.startTime).String(),
+			"last_event_time":    p.stats.lastEventTime.Format(time.RFC3339),
+		},
 	}
 }

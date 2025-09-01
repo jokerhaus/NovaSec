@@ -8,60 +8,60 @@ import (
 	"sync"
 	"time"
 
+	"novasec/internal/common/config"
 	"novasec/internal/common/logging"
 	"novasec/internal/common/nats"
 	"novasec/internal/correlator/dsl"
+	"novasec/internal/correlator/state"
 	"novasec/internal/models"
-
-	"gopkg.in/yaml.v3"
 )
 
-// Engine представляет движок корреляции // v1.0
+// Engine представляет движок корреляции событий // v1.0
 type Engine struct {
-	config   *Config
-	logger   *logging.Logger
-	nats     *nats.Client
-	compiler *dsl.Compiler
-	rules    map[string]*dsl.CompiledRule
-	state    StateManager
-	stopChan chan struct{}
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
+	config     *config.Config
+	logger     *logging.Logger
+	nats       *nats.Client
+	compiler   *dsl.Compiler
+	state      *state.MemoryStateManager
+	rules      map[string]*dsl.CompiledRule
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
+	stopChan   chan struct{}
+	eventQueue chan *models.Event
+	metrics    *EngineMetrics
 }
 
-// Config конфигурация движка корреляции // v1.0
-type Config struct {
-	MaxWorkers        int           `yaml:"max_workers"`
-	EventBufferSize   int           `yaml:"event_buffer_size"`
-	RuleCheckInterval time.Duration `yaml:"rule_check_interval"`
-	AlertTTL          time.Duration `yaml:"alert_ttl"`
-}
-
-// StateManager интерфейс для управления состоянием // v1.0
-type StateManager interface {
-	// GetWindowState возвращает состояние окна для правила и группы
-	GetWindowState(ruleID, groupKey string) (*dsl.WindowState, error)
-
-	// UpdateWindowState обновляет состояние окна
-	UpdateWindowState(ruleID, groupKey string, state *dsl.WindowState) error
-
-	// CleanupExpiredWindows очищает истекшие окна
-	CleanupExpiredWindows() error
-
-	// GetStats возвращает статистику состояния
-	GetStats() map[string]interface{}
+// EngineMetrics представляет метрики производительности движка // v1.0
+type EngineMetrics struct {
+	mu                sync.RWMutex
+	eventsProcessed   int64
+	alertsGenerated   int64
+	rulesTriggered    int64
+	processingTime    time.Duration
+	lastEventTime     time.Time
+	queueSize         int
+	workerUtilization float64
+	errorCount        int64
+	startTime         time.Time
 }
 
 // NewEngine создает новый движок корреляции // v1.0
-func NewEngine(config *Config, logger *logging.Logger, natsClient *nats.Client, stateManager StateManager) *Engine {
+func NewEngine(config *config.Config, logger *logging.Logger, natsClient *nats.Client) *Engine {
+	compiler := dsl.NewCompiler()
+	stateManager := state.NewMemoryStateManager()
+
 	return &Engine{
-		config:   config,
-		logger:   logger,
-		nats:     natsClient,
-		compiler: dsl.NewCompiler(),
-		rules:    make(map[string]*dsl.CompiledRule),
-		state:    stateManager,
-		stopChan: make(chan struct{}),
+		config:     config,
+		logger:     logger,
+		nats:       natsClient,
+		compiler:   compiler,
+		state:      stateManager,
+		rules:      make(map[string]*dsl.CompiledRule),
+		stopChan:   make(chan struct{}),
+		eventQueue: make(chan *models.Event, 1000), // Дефолтный размер очереди
+		metrics: &EngineMetrics{
+			startTime: time.Now(),
+		},
 	}
 }
 
@@ -69,107 +69,174 @@ func NewEngine(config *Config, logger *logging.Logger, natsClient *nats.Client, 
 func (e *Engine) Start(ctx context.Context) error {
 	e.logger.Logger.Info("Starting correlation engine")
 
-	// Подписываемся на нормализованные события
-	err := e.nats.SubscribeToEvents("events.normalized", func(data []byte) {
-		if err := e.handleNormalizedEvent(data); err != nil {
-			e.logger.Logger.WithError(err).Error("Failed to handle normalized event")
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to events.normalized: %w", err)
+	// Загружаем правила из базы данных или файлов
+	if err := e.loadRules(); err != nil {
+		return fmt.Errorf("failed to load rules: %w", err)
+	}
+
+	// Подписываемся на события из NATS
+	if err := e.subscribeToEvents(ctx); err != nil {
+		return fmt.Errorf("failed to subscribe to events: %w", err)
 	}
 
 	// Запускаем воркеры для обработки событий
-	for i := 0; i < e.config.MaxWorkers; i++ {
+	for i := 0; i < 5; i++ { // Дефолтное количество воркеров
 		e.wg.Add(1)
 		go e.worker(ctx, i)
 	}
 
-	// Запускаем очистку истекших окон
+	// Запускаем воркер очистки
 	e.wg.Add(1)
 	go e.cleanupWorker(ctx)
 
-	// Ждем завершения контекста или сигнала остановки
-	select {
-	case <-ctx.Done():
-		e.logger.Logger.Info("Context cancelled, stopping engine")
-	case <-e.stopChan:
-		e.logger.Logger.Info("Stop signal received, stopping engine")
-	}
+	// Запускаем сборщик метрик
+	e.wg.Add(1)
+	go e.metricsCollector(ctx)
 
-	// Останавливаем воркеры
-	close(e.stopChan)
-	e.wg.Wait()
-
+	e.logger.Logger.Info("Correlation engine started successfully")
 	return nil
 }
 
 // Stop останавливает движок корреляции // v1.0
-func (e *Engine) Stop() {
+func (e *Engine) Stop() error {
+	e.logger.Logger.Info("Stopping correlation engine")
+
+	// Отправляем сигнал остановки
 	close(e.stopChan)
+
+	// Ждем завершения всех воркеров
+	e.wg.Wait()
+
+	// Закрываем каналы
+	close(e.eventQueue)
+
+	e.logger.Logger.Info("Correlation engine stopped")
+	return nil
 }
 
-// LoadRule загружает и компилирует правило // v1.0
-func (e *Engine) LoadRule(ruleID string, yamlData string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+// loadRules загружает правила корреляции // v1.0
+func (e *Engine) loadRules() error {
+	// В реальной реализации здесь будет SQL запрос к таблице rules
+	// SELECT id, name, severity, description, yaml_content, enabled, created_at, updated_at FROM rules WHERE enabled = true
+	// ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// defer cancel()
 
-	// Парсим YAML в Rule
-	var rule dsl.Rule
-	if err := yaml.Unmarshal([]byte(yamlData), &rule); err != nil {
-		return fmt.Errorf("failed to parse rule YAML: %w", err)
+	// Пока используем встроенные правила для демонстрации
+	builtinRules := []dsl.Rule{
+		{
+			ID:          "login_bruteforce",
+			Name:        "SSH Brute Force Detection",
+			Severity:    "high",
+			Description: "Detects multiple failed SSH login attempts",
+			Enabled:     true,
+			Window: dsl.WindowConfig{
+				Duration: 5 * time.Minute,
+				Sliding:  true,
+			},
+			Threshold: dsl.ThresholdConfig{
+				Count: 5,
+				Type:  "unique",
+				Field: "user",
+			},
+			Conditions: []dsl.Condition{
+				{
+					Field:    "user",
+					Operator: "count_unique",
+					Value:    "5",
+				},
+			},
+			Actions: []dsl.Action{
+				{
+					Type: "alert",
+					Config: map[string]interface{}{
+						"severity": "high",
+						"message":  "Multiple failed SSH login attempts detected for user {{user}}",
+					},
+				},
+			},
+		},
+		{
+			ID:          "fim_critical",
+			Name:        "Critical File Changes",
+			Severity:    "critical",
+			Description: "Detects changes to critical system files",
+			Enabled:     true,
+			Window: dsl.WindowConfig{
+				Duration: 1 * time.Minute,
+				Sliding:  false,
+			},
+			Threshold: dsl.ThresholdConfig{
+				Count: 1,
+				Type:  "count",
+				Field: "file.path",
+			},
+			Conditions: []dsl.Condition{
+				{
+					Field:    "file.path",
+					Operator: "matches",
+					Value:    "/etc/(passwd|shadow|sudoers|hosts|resolv.conf)",
+				},
+			},
+			Actions: []dsl.Action{
+				{
+					Type: "alert",
+					Config: map[string]interface{}{
+						"severity": "critical",
+						"message":  "Critical system file {{file.path}} was modified",
+					},
+				},
+			},
+		},
 	}
 
-	// Компилируем правило
-	compiledRule, err := e.compiler.CompileRule(&rule)
+	// Компилируем каждое правило
+	for _, rule := range builtinRules {
+		compiledRule, err := e.compiler.CompileRule(&rule)
+		if err != nil {
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"rule_id": rule.ID,
+				"error":   err.Error(),
+			}).Warn("Failed to compile rule")
+			continue
+		}
+
+		e.rules[compiledRule.Rule.ID] = compiledRule
+		e.logger.Logger.WithField("rule_id", rule.ID).Info("Rule compiled and loaded")
+	}
+
+	e.logger.Logger.WithField("rules_loaded", len(e.rules)).Info("Rules loaded successfully")
+	return nil
+}
+
+// subscribeToEvents подписывается на события из NATS // v1.0
+func (e *Engine) subscribeToEvents(ctx context.Context) error {
+	// Подписываемся на subject events.normalized для получения нормализованных событий
+	err := e.nats.SubscribeToEvents("events.normalized", func(data []byte) {
+		var event models.Event
+		if err := json.Unmarshal(data, &event); err != nil {
+			e.logger.Logger.WithField("error", err.Error()).Error("Failed to unmarshal normalized event")
+			return
+		}
+
+		// Обрабатываем событие
+		if err := e.ProcessEvent(&event); err != nil {
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"event_id": event.GetDedupKey(),
+				"error":    err.Error(),
+			}).Error("Failed to process normalized event")
+		}
+	})
+
 	if err != nil {
-		return fmt.Errorf("failed to compile rule %s: %w", ruleID, err)
+		return fmt.Errorf("failed to subscribe to events.normalized: %w", err)
 	}
 
-	// Сохраняем скомпилированное правило
-	e.rules[ruleID] = compiledRule
-
-	e.logger.Logger.WithField("rule_id", ruleID).Info("Rule loaded and compiled")
-
+	e.logger.Logger.Info("Successfully subscribed to events.normalized events")
 	return nil
 }
 
-// UnloadRule выгружает правило // v1.0
-func (e *Engine) UnloadRule(ruleID string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, exists := e.rules[ruleID]; !exists {
-		return fmt.Errorf("rule %s not found", ruleID)
-	}
-
-	delete(e.rules, ruleID)
-
-	e.logger.Logger.WithField("rule_id", ruleID).Info("Rule unloaded")
-
-	return nil
-}
-
-// GetRules возвращает список загруженных правил // v1.0
-func (e *Engine) GetRules() []string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	rules := make([]string, 0, len(e.rules))
-	for ruleID := range e.rules {
-		rules = append(rules, ruleID)
-	}
-
-	return rules
-}
-
-// handleNormalizedEvent обрабатывает нормализованное событие // v1.0
-func (e *Engine) handleNormalizedEvent(data []byte) error {
-	var event models.Event
-	if err := json.Unmarshal(data, &event); err != nil {
-		return fmt.Errorf("failed to unmarshal normalized event: %w", err)
-	}
-
+// ProcessEvent обрабатывает нормализованное событие // v1.0
+func (e *Engine) ProcessEvent(event *models.Event) error {
 	e.logger.Logger.WithFields(map[string]interface{}{
 		"event_id": event.GetDedupKey(),
 		"host":     event.Host,
@@ -177,7 +244,66 @@ func (e *Engine) handleNormalizedEvent(data []byte) error {
 		"subtype":  event.Subtype,
 	}).Debug("Processing normalized event")
 
-	// Обрабатываем событие всеми правилами
+	// Добавляем событие в очередь для обработки
+	select {
+	case e.eventQueue <- event:
+		e.updateMetrics("queue_size", 1)
+	default:
+		// Очередь переполнена, логируем предупреждение
+		e.logger.Logger.WithField("event_id", event.GetDedupKey()).Warn("Event queue is full, dropping event")
+		e.updateMetrics("dropped_events", 1)
+	}
+
+	return nil
+}
+
+// worker воркер для обработки событий из очереди // v1.0
+func (e *Engine) worker(ctx context.Context, id int) {
+	defer e.wg.Done()
+
+	e.logger.Logger.WithFields(map[string]interface{}{
+		"worker_id": id,
+	}).Info("Correlation worker started")
+
+	// Обрабатываем события из очереди
+	for {
+		select {
+		case <-ctx.Done():
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker context cancelled")
+			return
+		case <-e.stopChan:
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker stop signal received")
+			return
+		case event, ok := <-e.eventQueue:
+			if !ok {
+				// Канал закрыт
+				return
+			}
+
+			// Обрабатываем событие
+			startTime := time.Now()
+			if err := e.processEvent(event); err != nil {
+				e.logger.Logger.WithFields(map[string]interface{}{
+					"worker_id": id,
+					"event_id":  event.GetDedupKey(),
+					"error":     err.Error(),
+				}).Error("Failed to process event")
+				e.updateMetrics("error_count", 1)
+			} else {
+				processingTime := time.Since(startTime)
+				e.updateMetrics("events_processed", 1)
+				e.updateMetrics("processing_time", processingTime)
+			}
+		}
+	}
+}
+
+// processEvent обрабатывает одно событие // v1.0
+func (e *Engine) processEvent(event *models.Event) error {
 	e.mu.RLock()
 	rules := make([]*dsl.CompiledRule, 0, len(e.rules))
 	for _, rule := range e.rules {
@@ -185,70 +311,70 @@ func (e *Engine) handleNormalizedEvent(data []byte) error {
 	}
 	e.mu.RUnlock()
 
+	// Проверяем событие против всех правил
 	for _, rule := range rules {
-		if err := e.processEventWithRule(&event, rule); err != nil {
-			e.logger.Logger.WithFields(map[string]interface{}{
-				"event_id": event.GetDedupKey(),
-				"rule_id":  rule.Rule.ID,
-				"error":    err.Error(),
-			}).Error("Failed to process event with rule")
-			// Продолжаем с другими правилами
+		// Проверяем, соответствует ли событие правилу
+		if !rule.Matcher.Match(event) {
+			continue
 		}
+
+		// Обрабатываем правило
+		if err := e.evaluateRule(rule, event); err != nil {
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"rule_id":  rule.Rule.ID,
+				"event_id": event.GetDedupKey(),
+				"error":    err.Error(),
+			}).Error("Failed to evaluate rule")
+			continue
+		}
+
+		e.updateMetrics("rules_triggered", 1)
 	}
 
 	return nil
 }
 
-// processEventWithRule обрабатывает событие с конкретным правилом // v1.0
-func (e *Engine) processEventWithRule(event *models.Event, rule *dsl.CompiledRule) error {
-	// Проверяем, соответствует ли событие условиям правила
-	if !rule.Matcher.Match(event) {
-		return nil
-	}
+// evaluateRule оценивает правило для события // v1.0
+func (e *Engine) evaluateRule(rule *dsl.CompiledRule, event *models.Event) error {
+	// Получаем групповой ключ для события
+	groupKey := e.getGroupKey(rule, event)
 
-	// Получаем ключ группы для события
-	groupKey := rule.Evaluator.GetGroupKey(event)
-
-	// Получаем состояние окна
-	windowState, err := e.state.GetWindowState(rule.Rule.ID, groupKey)
-	if err != nil {
-		return fmt.Errorf("failed to get window state: %w", err)
-	}
-
-	// Добавляем событие в окно
+	// Проверяем временное окно
 	triggered := rule.Evaluator.AddEvent(event)
 
-	// Обновляем состояние окна
-	if err := e.state.UpdateWindowState(rule.Rule.ID, groupKey, windowState); err != nil {
-		return fmt.Errorf("failed to update window state: %w", err)
-	}
-
-	// Если правило сработало, создаем алерт
+	// Если правило сработало, выполняем действия
 	if triggered {
-		if err := e.createAlert(rule, event, groupKey); err != nil {
-			return fmt.Errorf("failed to create alert: %w", err)
+		if err := e.executeActions(rule, event, groupKey); err != nil {
+			return fmt.Errorf("failed to execute actions: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// createAlert создает алерт на основе сработавшего правила // v1.0
-func (e *Engine) createAlert(rule *dsl.CompiledRule, event *models.Event, groupKey string) error {
-	// Генерируем ключ дедупликации
-	dedupKey := fmt.Sprintf("%s:%s:%s",
-		rule.Rule.ID,
-		groupKey,
-		rule.Rule.Severity)
+// getGroupKey генерирует групповой ключ для события // v1.0
+func (e *Engine) getGroupKey(rule *dsl.CompiledRule, event *models.Event) string {
+	// В реальной реализации здесь будет логика группировки событий
+	// Пока используем простую группировку по хосту
+	return fmt.Sprintf("host:%s", event.Host)
+}
 
+// executeActions выполняет действия правила // v1.0
+func (e *Engine) executeActions(rule *dsl.CompiledRule, event *models.Event, groupKey string) error {
 	// Создаем алерт
 	alert := &models.Alert{
-		ID:        generateAlertID(),
-		TS:        time.Now(),
-		RuleID:    rule.Rule.ID,
-		Severity:  rule.Rule.Severity,
-		DedupKey:  dedupKey,
-		Payload:   make(map[string]interface{}),
+		ID:       generateAlertID(),
+		TS:       time.Now(),
+		RuleID:   rule.Rule.ID,
+		Severity: rule.Rule.Severity,
+		DedupKey: fmt.Sprintf("%s:%s:%s", rule.Rule.ID, event.Host, rule.Rule.Severity),
+		Payload: map[string]interface{}{
+			"message":  fmt.Sprintf("Rule %s triggered for group %s", rule.Rule.ID, groupKey),
+			"event_id": event.GetDedupKey(),
+			"host":     event.Host,
+			"category": event.Category,
+			"subtype":  event.Subtype,
+		},
 		Status:    "new",
 		Env:       event.Env,
 		Host:      event.Host,
@@ -256,11 +382,17 @@ func (e *Engine) createAlert(rule *dsl.CompiledRule, event *models.Event, groupK
 		UpdatedAt: time.Now(),
 	}
 
-	// Заполняем payload
-	alert.Payload["event_count"] = 1
-	alert.Payload["group_key"] = groupKey
-	alert.Payload["last_event"] = event.GetDedupKey()
-	alert.Payload["message"] = fmt.Sprintf("Rule %s triggered for group %s", rule.Rule.ID, groupKey)
+	// Выполняем действия
+	for _, action := range rule.Actions {
+		if err := action.Execute(alert); err != nil {
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"alert_id": alert.ID,
+				"action":   action.GetType(),
+				"error":    err.Error(),
+			}).Error("Failed to execute action")
+			continue
+		}
+	}
 
 	// Публикуем алерт в NATS
 	alertData, err := json.Marshal(alert)
@@ -279,49 +411,15 @@ func (e *Engine) createAlert(rule *dsl.CompiledRule, event *models.Event, groupK
 		"group_key": groupKey,
 	}).Info("Alert created and published")
 
+	e.updateMetrics("alerts_generated", 1)
 	return nil
-}
-
-// worker воркер для обработки событий // v1.0
-func (e *Engine) worker(ctx context.Context, id int) {
-	defer e.wg.Done()
-
-	e.logger.Logger.WithFields(map[string]interface{}{
-		"worker_id": id,
-	}).Info("Correlation worker started")
-
-	// В реальной реализации здесь будет обработка событий из очереди
-	// Пока используем простую логику ожидания
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			e.logger.Logger.WithFields(map[string]interface{}{
-				"worker_id": id,
-			}).Info("Worker context cancelled")
-			return
-		case <-e.stopChan:
-			e.logger.Logger.WithFields(map[string]interface{}{
-				"worker_id": id,
-			}).Info("Worker stop signal received")
-			return
-		case <-ticker.C:
-			// В реальной реализации здесь будет обработка событий из очереди
-			// Пока просто проверяем состояние каждые 100ms
-			// TODO: Добавить логику обработки событий из очереди
-			// TODO: Добавить метрики производительности
-			continue
-		}
-	}
 }
 
 // cleanupWorker очищает истекшие окна // v1.0
 func (e *Engine) cleanupWorker(ctx context.Context) {
 	defer e.wg.Done()
 
-	ticker := time.NewTicker(e.config.RuleCheckInterval)
+	ticker := time.NewTicker(1 * time.Minute) // Дефолтный интервал
 	defer ticker.Stop()
 
 	e.logger.Logger.Info("Cleanup worker started")
@@ -342,17 +440,106 @@ func (e *Engine) cleanupWorker(ctx context.Context) {
 	}
 }
 
+// metricsCollector собирает метрики производительности // v1.0
+func (e *Engine) metricsCollector(ctx context.Context) {
+	defer e.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	e.logger.Logger.Info("Metrics collector started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.logger.Logger.Info("Metrics collector context cancelled")
+			return
+		case <-e.stopChan:
+			e.logger.Logger.Info("Metrics collector stop signal received")
+			return
+		case <-ticker.C:
+			e.updatePerformanceMetrics()
+		}
+	}
+}
+
+// updatePerformanceMetrics обновляет метрики производительности // v1.0
+func (e *Engine) updatePerformanceMetrics() {
+	e.metrics.mu.Lock()
+	defer e.metrics.mu.Unlock()
+
+	// Обновляем размер очереди
+	e.metrics.queueSize = len(e.eventQueue)
+
+	// Обновляем утилизацию воркеров
+	if e.metrics.eventsProcessed > 0 {
+		uptime := time.Since(e.metrics.startTime)
+		e.metrics.workerUtilization = float64(e.metrics.eventsProcessed) / uptime.Seconds()
+	}
+
+	// Логируем метрики
+	e.logger.Logger.WithFields(map[string]interface{}{
+		"events_processed":   e.metrics.eventsProcessed,
+		"alerts_generated":   e.metrics.alertsGenerated,
+		"rules_triggered":    e.metrics.rulesTriggered,
+		"queue_size":         e.metrics.queueSize,
+		"worker_utilization": fmt.Sprintf("%.2f", e.metrics.workerUtilization),
+		"error_count":        e.metrics.errorCount,
+		"uptime":             time.Since(e.metrics.startTime).String(),
+	}).Debug("Performance metrics updated")
+}
+
+// updateMetrics обновляет метрики // v1.0
+func (e *Engine) updateMetrics(metric string, value interface{}) {
+	e.metrics.mu.Lock()
+	defer e.metrics.mu.Unlock()
+
+	switch metric {
+	case "events_processed":
+		e.metrics.eventsProcessed++
+	case "alerts_generated":
+		e.metrics.alertsGenerated++
+	case "rules_triggered":
+		e.metrics.rulesTriggered++
+	case "error_count":
+		e.metrics.errorCount++
+	case "processing_time":
+		if duration, ok := value.(time.Duration); ok {
+			e.metrics.processingTime = duration
+		}
+	case "queue_size":
+		if size, ok := value.(int); ok {
+			e.metrics.queueSize = size
+		}
+	}
+
+	e.metrics.lastEventTime = time.Now()
+}
+
 // GetStats возвращает статистику движка корреляции // v1.0
 func (e *Engine) GetStats() map[string]interface{} {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	e.metrics.mu.RLock()
+	defer e.metrics.mu.RUnlock()
+
 	stats := map[string]interface{}{
 		"status":       "running",
-		"workers":      e.config.MaxWorkers,
+		"workers":      5, // Дефолтное количество воркеров
 		"loaded_rules": len(e.rules),
-		"event_buffer": e.config.EventBufferSize,
-		"alert_ttl":    e.config.AlertTTL.String(),
+		"event_buffer": 1000, // Дефолтный размер буфера
+		"alert_ttl":    "1h", // Дефолтный TTL алертов
+		"metrics": map[string]interface{}{
+			"events_processed":   e.metrics.eventsProcessed,
+			"alerts_generated":   e.metrics.alertsGenerated,
+			"rules_triggered":    e.metrics.rulesTriggered,
+			"queue_size":         e.metrics.queueSize,
+			"worker_utilization": fmt.Sprintf("%.2f", e.metrics.workerUtilization),
+			"error_count":        e.metrics.errorCount,
+			"uptime":             time.Since(e.metrics.startTime).String(),
+			"last_event_time":    e.metrics.lastEventTime.Format(time.RFC3339),
+		},
 	}
 
 	// Добавляем статистику состояния
