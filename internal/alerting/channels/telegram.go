@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/common/logging"
+	"novasec/internal/models"
 )
 
 // TelegramChannel представляет канал отправки Telegram уведомлений // v1.0

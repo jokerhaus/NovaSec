@@ -2,19 +2,24 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/correlator/dsl"
+	"novasec/internal/common/logging"
+	"novasec/internal/correlator/dsl"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // RedisStateManager реализует StateManager через Redis // v1.0
 type RedisStateManager struct {
 	config *RedisConfig
 	logger *logging.Logger
-	// В реальной реализации здесь будет Redis клиент
+	client *redis.Client
 }
 
 // RedisConfig конфигурация Redis StateManager // v1.0
@@ -32,26 +37,50 @@ type RedisConfig struct {
 
 // NewRedisStateManager создает новый Redis StateManager // v1.0
 func NewRedisStateManager(config *RedisConfig, logger *logging.Logger) *RedisStateManager {
+	// Создаем Redis клиент
+	client := redis.NewClient(&redis.Options{
+		Addr:            fmt.Sprintf("%s:%d", config.Host, config.Port),
+		Password:        config.Password,
+		DB:              config.Database,
+		DialTimeout:     config.Timeout,
+		ReadTimeout:     config.Timeout,
+		WriteTimeout:    config.Timeout,
+		MaxRetries:      config.MaxRetries,
+		MinRetryBackoff: config.RetryDelay,
+		MaxRetryBackoff: config.RetryDelay * 2,
+	})
+
 	return &RedisStateManager{
 		config: config,
 		logger: logger,
+		client: client,
 	}
 }
 
 // GetWindowState возвращает состояние окна для правила и группы // v1.0
 func (r *RedisStateManager) GetWindowState(ruleID, groupKey string) (*dsl.WindowState, error) {
-	// В реальной реализации здесь будет запрос к Redis
-	// Пока возвращаем заглушку
-
 	key := r.makeKey(ruleID, groupKey)
 
-	// Симулируем получение из Redis
-	window := &dsl.WindowState{
-		StartTime:   time.Now().Add(-5 * time.Minute),
-		EndTime:     time.Now().Add(5 * time.Minute),
-		EventCount:  0,
-		UniqueCount: make(map[string]int),
-		LastEvent:   time.Time{},
+	// Получаем данные из Redis
+	data, err := r.client.Get(context.Background(), key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			// Ключ не найден, возвращаем пустое состояние
+			return &dsl.WindowState{
+				StartTime:   time.Now(),
+				EndTime:     time.Now(),
+				EventCount:  0,
+				UniqueCount: make(map[string]int),
+				LastEvent:   time.Time{},
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to get window state from Redis: %w", err)
+	}
+
+	// Десериализуем состояние
+	var window dsl.WindowState
+	if err := json.Unmarshal([]byte(data), &window); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal window state: %w", err)
 	}
 
 	r.logger.Logger.WithFields(map[string]interface{}{
@@ -60,14 +89,11 @@ func (r *RedisStateManager) GetWindowState(ruleID, groupKey string) (*dsl.Window
 		"redis_key": key,
 	}).Debug("Window state retrieved from Redis")
 
-	return window, nil
+	return &window, nil
 }
 
 // UpdateWindowState обновляет состояние окна в Redis // v1.0
 func (r *RedisStateManager) UpdateWindowState(ruleID, groupKey string, state *dsl.WindowState) error {
-	// В реальной реализации здесь будет сохранение в Redis
-	// Пока логируем операцию
-
 	key := r.makeKey(ruleID, groupKey)
 
 	// Сериализуем состояние
@@ -76,10 +102,16 @@ func (r *RedisStateManager) UpdateWindowState(ruleID, groupKey string, state *ds
 		return fmt.Errorf("failed to marshal window state: %w", err)
 	}
 
-	// Симулируем сохранение в Redis с TTL
+	// Определяем TTL
 	ttl := r.config.TTL
 	if ttl == 0 {
 		ttl = 24 * time.Hour // Дефолтный TTL
+	}
+
+	// Сохраняем в Redis с TTL
+	err = r.client.Set(context.Background(), key, stateData, ttl).Err()
+	if err != nil {
+		return fmt.Errorf("failed to save window state to Redis: %w", err)
 	}
 
 	r.logger.Logger.WithFields(map[string]interface{}{
@@ -96,37 +128,124 @@ func (r *RedisStateManager) UpdateWindowState(ruleID, groupKey string, state *ds
 
 // CleanupExpiredWindows очищает истекшие окна в Redis // v1.0
 func (r *RedisStateManager) CleanupExpiredWindows() error {
-	// В реальной реализации здесь будет очистка истекших ключей в Redis
-	// Пока логируем операцию
-
 	r.logger.Logger.Debug("Cleaning up expired windows in Redis")
 
-	// Симулируем очистку
-	// В Redis можно использовать SCAN + TTL для поиска истекших ключей
+	// Используем SCAN для поиска ключей с префиксом
+	pattern := r.config.KeyPrefix + ":*"
+	if r.config.KeyPrefix == "" {
+		pattern = "novasec:windows:*"
+	}
+
+	var cursor uint64
+	var err error
+	var keys []string
+
+	for {
+		keys, cursor, err = r.client.Scan(context.Background(), cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("failed to scan Redis keys: %w", err)
+		}
+
+		// Проверяем TTL для каждого ключа
+		for _, key := range keys {
+			ttl, err := r.client.TTL(context.Background(), key).Result()
+			if err != nil {
+				r.logger.Logger.WithError(err).WithField("key", key).Warn("Failed to get TTL for key")
+				continue
+			}
+
+			// Если TTL < 0, ключ истек
+			if ttl < 0 {
+				if err := r.client.Del(context.Background(), key).Err(); err != nil {
+					r.logger.Logger.WithError(err).WithField("key", key).Warn("Failed to delete expired key")
+				} else {
+					r.logger.Logger.WithField("key", key).Debug("Deleted expired key")
+				}
+			}
+		}
+
+		if cursor == 0 {
+			break
+		}
+	}
 
 	return nil
 }
 
 // GetStats возвращает статистику Redis StateManager // v1.0
 func (r *RedisStateManager) GetStats() map[string]interface{} {
-	// В реальной реализации здесь будет получение статистики из Redis
-	// Пока возвращаем заглушку
-
 	stats := map[string]interface{}{
-		"type":         "redis",
-		"host":         r.config.Host,
-		"port":         r.config.Port,
-		"database":     r.config.Database,
-		"key_prefix":   r.config.KeyPrefix,
-		"ttl":          r.config.TTL.String(),
-		"connected":    true, // В реальной реализации будет проверка соединения
-		"total_keys":   1250,
-		"expired_keys": 45,
-		"memory_usage": "128MB",
-		"last_cleanup": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		"type":       "redis",
+		"host":       r.config.Host,
+		"port":       r.config.Port,
+		"database":   r.config.Database,
+		"key_prefix": r.config.KeyPrefix,
+		"ttl":        r.config.TTL.String(),
 	}
 
+	// Проверяем соединение
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := r.client.Ping(ctx).Err(); err != nil {
+		stats["connected"] = false
+		stats["error"] = err.Error()
+		return stats
+	}
+
+	stats["connected"] = true
+
+	// Получаем статистику Redis
+	info, err := r.client.Info(ctx, "keyspace").Result()
+	if err == nil {
+		stats["redis_info"] = info
+	}
+
+	// Подсчитываем ключи с префиксом
+	pattern := r.config.KeyPrefix + ":*"
+	if r.config.KeyPrefix == "" {
+		pattern = "novasec:windows:*"
+	}
+
+	var cursor uint64
+	var keys []string
+	totalKeys := 0
+	expiredKeys := 0
+
+	for {
+		keys, cursor, err = r.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			break
+		}
+
+		totalKeys += len(keys)
+
+		// Проверяем TTL для каждого ключа
+		for _, key := range keys {
+			ttl, err := r.client.TTL(ctx, key).Result()
+			if err == nil && ttl < 0 {
+				expiredKeys++
+			}
+		}
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	stats["total_keys"] = totalKeys
+	stats["expired_keys"] = expiredKeys
+	stats["last_cleanup"] = time.Now().Format(time.RFC3339)
+
 	return stats
+}
+
+// Close закрывает соединение с Redis // v1.0
+func (r *RedisStateManager) Close() error {
+	if r.client != nil {
+		return r.client.Close()
+	}
+	return nil
 }
 
 // makeKey создает ключ для Redis // v1.0
@@ -140,38 +259,120 @@ func (r *RedisStateManager) makeKey(ruleID, groupKey string) string {
 
 // GetWindowCount возвращает количество окон в Redis // v1.0
 func (r *RedisStateManager) GetWindowCount() int {
-	// В реальной реализации здесь будет подсчет ключей в Redis
-	// Пока возвращаем заглушку
-	return 1250
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pattern := r.config.KeyPrefix + ":*"
+	if r.config.KeyPrefix == "" {
+		pattern = "novasec:windows:*"
+	}
+
+	var cursor uint64
+	var keys []string
+	var err error
+	totalCount := 0
+
+	for {
+		keys, cursor, err = r.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			r.logger.Logger.WithError(err).Error("Failed to scan Redis keys")
+			break
+		}
+
+		totalCount += len(keys)
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return totalCount
 }
 
 // ClearAllWindows очищает все окна в Redis // v1.0
 func (r *RedisStateManager) ClearAllWindows() error {
-	// В реальной реализации здесь будет очистка всех ключей с префиксом
-	// Пока логируем операцию
-
 	r.logger.Logger.Info("Clearing all windows from Redis")
 
-	// В Redis можно использовать SCAN + DEL для удаления всех ключей с префиксом
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
+	pattern := r.config.KeyPrefix + ":*"
+	if r.config.KeyPrefix == "" {
+		pattern = "novasec:windows:*"
+	}
+
+	var cursor uint64
+	var keys []string
+	var err error
+	deletedCount := 0
+
+	for {
+		keys, cursor, err = r.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("failed to scan Redis keys: %w", err)
+		}
+
+		// Удаляем найденные ключи
+		if len(keys) > 0 {
+			if err := r.client.Del(ctx, keys...).Err(); err != nil {
+				r.logger.Logger.WithError(err).WithField("keys_count", len(keys)).Warn("Failed to delete some keys")
+			} else {
+				deletedCount += len(keys)
+			}
+		}
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	r.logger.Logger.WithField("deleted_keys", deletedCount).Info("Cleared all windows from Redis")
 	return nil
 }
 
 // GetWindowInfo возвращает информацию о конкретном окне // v1.0
 func (r *RedisStateManager) GetWindowInfo(ruleID, groupKey string) (map[string]interface{}, error) {
-	// В реальной реализации здесь будет запрос к Redis
-	// Пока возвращаем заглушку
-
 	key := r.makeKey(ruleID, groupKey)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Проверяем существование ключа
+	exists, err := r.client.Exists(ctx, key).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check key existence: %w", err)
+	}
+
+	if exists == 0 {
+		return map[string]interface{}{
+			"rule_id":   ruleID,
+			"group_key": groupKey,
+			"redis_key": key,
+			"exists":    false,
+		}, nil
+	}
+
+	// Получаем TTL
+	ttl, err := r.client.TTL(ctx, key).Result()
+	if err != nil {
+		ttl = -1 // Если не удалось получить TTL
+	}
+
+	// Получаем размер данных
+	data, err := r.client.Get(ctx, key).Result()
+	size := "0B"
+	if err == nil {
+		size = fmt.Sprintf("%dB", len(data))
+	}
 
 	info := map[string]interface{}{
 		"rule_id":     ruleID,
 		"group_key":   groupKey,
 		"redis_key":   key,
-		"ttl":         r.config.TTL.String(),
+		"ttl":         ttl.String(),
 		"exists":      true,
-		"size":        "2.5KB",
-		"last_access": time.Now().Add(-5 * time.Minute).Format(time.RFC3339),
+		"size":        size,
+		"last_access": time.Now().Format(time.RFC3339),
 	}
 
 	return info, nil
@@ -179,22 +380,62 @@ func (r *RedisStateManager) GetWindowInfo(ruleID, groupKey string) (map[string]i
 
 // ListWindows возвращает список всех окон // v1.0
 func (r *RedisStateManager) ListWindows() []map[string]interface{} {
-	// В реальной реализации здесь будет SCAN по Redis
-	// Пока возвращаем заглушку
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	windows := make([]map[string]interface{}, 0, 10)
+	pattern := r.config.KeyPrefix + ":*"
+	if r.config.KeyPrefix == "" {
+		pattern = "novasec:windows:*"
+	}
 
-	// Симулируем список окон
-	for i := 0; i < 10; i++ {
-		window := map[string]interface{}{
-			"rule_id":     fmt.Sprintf("rule_%d", i),
-			"group_key":   fmt.Sprintf("group_%d", i),
-			"redis_key":   fmt.Sprintf("novasec:windows:rule_%d:group_%d", i, i),
-			"ttl":         r.config.TTL.String(),
-			"size":        "2.1KB",
-			"last_access": time.Now().Add(-time.Duration(i) * time.Minute).Format(time.RFC3339),
+	var cursor uint64
+	var keys []string
+	var err error
+	windows := make([]map[string]interface{}, 0)
+
+	for {
+		keys, cursor, err = r.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			r.logger.Logger.WithError(err).Error("Failed to scan Redis keys")
+			break
 		}
-		windows = append(windows, window)
+
+		// Получаем информацию о каждом ключе
+		for _, key := range keys {
+			// Парсим ключ для извлечения rule_id и group_key
+			parts := strings.Split(key, ":")
+			if len(parts) >= 4 {
+				ruleID := parts[len(parts)-2]
+				groupKey := parts[len(parts)-1]
+
+				// Получаем TTL
+				ttl, err := r.client.TTL(ctx, key).Result()
+				if err != nil {
+					ttl = -1
+				}
+
+				// Получаем размер данных
+				data, err := r.client.Get(ctx, key).Result()
+				size := "0B"
+				if err == nil {
+					size = fmt.Sprintf("%dB", len(data))
+				}
+
+				window := map[string]interface{}{
+					"rule_id":     ruleID,
+					"group_key":   groupKey,
+					"redis_key":   key,
+					"ttl":         ttl.String(),
+					"size":        size,
+					"last_access": time.Now().Format(time.RFC3339),
+				}
+				windows = append(windows, window)
+			}
+		}
+
+		if cursor == 0 {
+			break
+		}
 	}
 
 	return windows
@@ -202,43 +443,66 @@ func (r *RedisStateManager) ListWindows() []map[string]interface{} {
 
 // Ping проверяет соединение с Redis // v1.0
 func (r *RedisStateManager) Ping() error {
-	// В реальной реализации здесь будет PING команда к Redis
-	// Пока возвращаем успех
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	r.logger.Logger.Debug("Ping Redis")
+	if err := r.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("Redis ping failed: %w", err)
+	}
+
+	r.logger.Logger.Debug("Redis ping successful")
 	return nil
 }
 
 // GetRedisInfo возвращает информацию о Redis сервере // v1.0
 func (r *RedisStateManager) GetRedisInfo() (map[string]interface{}, error) {
-	// В реальной реализации здесь будет INFO команда к Redis
-	// Пока возвращаем заглушку
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	info := map[string]interface{}{
-		"redis_version":              "6.2.6",
-		"os":                         "Linux 5.4.0",
-		"arch_bits":                  64,
-		"uptime_in_seconds":          86400,
-		"connected_clients":          5,
-		"used_memory_human":          "128MB",
-		"used_memory_peak_human":     "150MB",
-		"total_commands_processed":   125000,
-		"total_connections_received": 1500,
-		"keyspace_hits":              89000,
-		"keyspace_misses":            11000,
+	// Получаем общую информацию о Redis
+	info, err := r.client.Info(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Redis info: %w", err)
 	}
 
-	return info, nil
+	// Парсим INFO ответ
+	result := make(map[string]interface{})
+	lines := strings.Split(info, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, ":") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+
+				// Преобразуем числовые значения
+				if intVal, err := strconv.Atoi(value); err == nil {
+					result[key] = intVal
+				} else if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+					result[key] = floatVal
+				} else {
+					result[key] = value
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // FlushDatabase очищает всю базу данных Redis // v1.0
 func (r *RedisStateManager) FlushDatabase() error {
-	// В реальной реализации здесь будет FLUSHDB команда к Redis
-	// Пока логируем операцию
-
 	r.logger.Logger.Warn("Flushing Redis database")
 
-	// В продакшене эта операция должна быть защищена
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
+	// В продакшене эта операция должна быть защищена
+	// Выполняем FLUSHDB команду
+	if err := r.client.FlushDB(ctx).Err(); err != nil {
+		return fmt.Errorf("failed to flush Redis database: %w", err)
+	}
+
+	r.logger.Logger.Info("Redis database flushed successfully")
 	return nil
 }

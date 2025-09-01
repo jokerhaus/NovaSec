@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // Rule представляет правило корреляции // v1.0

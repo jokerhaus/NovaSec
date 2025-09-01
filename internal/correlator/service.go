@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/correlator/dsl"
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
+	"novasec/internal/correlator/dsl"
+	"novasec/internal/models"
 )
 
 // Service represents the correlator service

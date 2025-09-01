@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/novasec/novasec/internal/adminapi"
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
+	"novasec/internal/adminapi"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
 )
 
 func main() {
@@ -22,7 +22,15 @@ func main() {
 	}
 
 	// Initialize logger
-	logger, err := logging.NewLogger(cfg.Logging)
+	logger, err := logging.NewLogger(logging.Config{
+		Level:      cfg.Logging.Level,
+		Format:     cfg.Logging.Format,
+		Output:     cfg.Logging.Output,
+		MaxSize:    cfg.Logging.MaxSize,
+		MaxBackups: cfg.Logging.MaxBackups,
+		MaxAge:     cfg.Logging.MaxAge,
+		Compress:   cfg.Logging.Compress,
+	})
 	if err != nil {
 		panic(err)
 	}

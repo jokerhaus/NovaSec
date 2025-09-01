@@ -2,13 +2,14 @@
 package parsers
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // NginxAccessParser парсер для nginx access логов // v1.0
@@ -230,16 +231,51 @@ func (p *NginxAccessParser) parseCommonFormat(matches []string, event *models.Ev
 
 // parseJSONFormat парсит JSON формат // v1.0
 func (p *NginxAccessParser) parseJSONFormat(raw string, event *models.Event) (*models.Event, error) {
-	// TODO: Реализовать парсинг JSON формата
-	event.Subtype = "http_request_json"
-	event.Severity = "info"
-	event.Message = "JSON access log entry"
+	// Парсим JSON лог
+	var logEntry struct {
+		Time      string  `json:"time"`
+		Method    string  `json:"method"`
+		URI       string  `json:"uri"`
+		Status    int     `json:"status"`
+		UserAgent string  `json:"user_agent"`
+		IP        string  `json:"ip"`
+		Referer   string  `json:"referer"`
+		Bytes     int64   `json:"bytes"`
+		Duration  float64 `json:"duration"`
+	}
 
+	if err := json.Unmarshal([]byte(raw), &logEntry); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON log: %w", err)
+	}
+
+	// Заполняем событие
+	event.Subtype = "http_request_json"
+	event.Severity = p.determineSeverity(logEntry.Method, strconv.Itoa(logEntry.Status), logEntry.URI)
+	event.Message = fmt.Sprintf("HTTP %s %s - %d", logEntry.Method, logEntry.URI, logEntry.Status)
+
+	// Добавляем сетевую информацию
+	if logEntry.IP != "" {
+		event.Network = &models.Network{
+			SrcIP: logEntry.IP,
+			Proto: "http",
+		}
+	}
+
+	// Добавляем метки
 	if event.Labels == nil {
 		event.Labels = make(map[string]string)
 	}
 	event.Labels["access_type"] = "json"
 	event.Labels["parser"] = "nginx_access"
+	event.Labels["method"] = logEntry.Method
+	event.Labels["status"] = strconv.Itoa(logEntry.Status)
+	event.Labels["user_agent"] = logEntry.UserAgent
+	event.Labels["referer"] = logEntry.Referer
+	event.Labels["bytes"] = strconv.FormatInt(logEntry.Bytes, 10)
+	event.Labels["duration"] = strconv.FormatFloat(logEntry.Duration, 'f', 3, 64)
+
+	// Определяем угрозы
+	p.detectThreats(event, logEntry.Method, logEntry.URI, strconv.Itoa(logEntry.Status), logEntry.UserAgent)
 
 	return event, nil
 }

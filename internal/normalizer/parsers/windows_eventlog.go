@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // WindowsEventLogParser парсит Windows Event Log события // v1.0
@@ -328,18 +328,16 @@ func (p *WindowsEventLogParser) parseNetworkEvent(raw string) *models.Event {
 	return nil
 }
 
-// parseIP парсит IP адрес в числовой формат // v1.0
-func (p *WindowsEventLogParser) parseIP(ipStr string) *int {
+// parseIP парсит IP адрес в строковый формат // v1.0
+func (p *WindowsEventLogParser) parseIP(ipStr string) string {
 	// Простая реализация для IPv4
 	// В продакшене лучше использовать net.ParseIP
 	if ipStr == "::1" || ipStr == "localhost" || ipStr == "-" {
-		ip := 2130706433 // 127.0.0.1
-		return &ip
+		return "127.0.0.1"
 	}
 
-	// Для простоты возвращаем 0 для нераспознанных IP
-	ip := 0
-	return &ip
+	// Возвращаем исходную строку
+	return ipStr
 }
 
 // GetSupportedSources возвращает список поддерживаемых источников // v1.0

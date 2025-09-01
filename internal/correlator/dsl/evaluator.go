@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // SlidingWindowEvaluator оценщик скользящих временных окон // v1.0
@@ -209,8 +209,8 @@ func (e *SlidingWindowEvaluator) extractFieldValue(event *models.Event, field st
 		}
 		return ""
 	case "network.src_ip":
-		if event.Network != nil && event.Network.SrcIP != nil {
-			return fmt.Sprintf("%d", *event.Network.SrcIP)
+		if event.Network != nil && event.Network.SrcIP != "" {
+			return event.Network.SrcIP
 		}
 		return ""
 	case "network.src_port":

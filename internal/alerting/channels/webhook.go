@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/common/logging"
+	"novasec/internal/models"
 )
 
 // WebhookChannel представляет канал отправки webhook уведомлений // v1.0

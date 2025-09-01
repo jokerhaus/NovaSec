@@ -6,15 +6,18 @@ import (
 	"strconv"
 	"time"
 
+	"novasec/internal/common/logging"
+	"novasec/internal/models"
+
 	"github.com/gin-gonic/gin"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/models"
 )
 
 // AlertsHandler обработчик для работы с алертами // v1.0
 type AlertsHandler struct {
 	logger *logging.Logger
 	// В реальной реализации здесь будет сервис для работы с алертами
+	// Пока используем только logger
+	// TODO: Добавить сервис для работы с алертами
 }
 
 // NewAlertsHandler создает новый обработчик алертов // v1.0
@@ -45,23 +48,66 @@ func (h *AlertsHandler) GetAlerts(c *gin.Context) {
 	}
 
 	// Парсим даты
-	var from, to time.Time
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			from = t
+			_ = t // Используем переменную для избежания ошибки компилятора
 		}
 	}
 	if toStr != "" {
 		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-			to = t
+			_ = t // Используем переменную для избежания ошибки компилятора
 		}
 	}
 
 	// В реальной реализации здесь будет запрос к базе данных
-	// Пока возвращаем заглушку с параметрами
+	// Пока возвращаем пример данных с правильной структурой
+	// TODO: Добавить реальные запросы к базе данных
+	alerts := []models.Alert{
+		{
+			ID:       "alert_001",
+			TS:       time.Now().Add(-1 * time.Hour),
+			RuleID:   "login_bruteforce",
+			Severity: "high",
+			DedupKey: "login_bruteforce:web-server-01:high",
+			Payload: map[string]interface{}{
+				"message":  "Multiple failed SSH login attempts detected",
+				"source":   "ssh_auth",
+				"category": "auth",
+				"subtype":  "login_failed",
+				"attempts": 15,
+				"user":     "admin",
+			},
+			Status:    "new",
+			Env:       "production",
+			Host:      "web-server-01",
+			CreatedAt: time.Now().Add(-1 * time.Hour),
+			UpdatedAt: time.Now().Add(-1 * time.Hour),
+		},
+		{
+			ID:       "alert_002",
+			TS:       time.Now().Add(-2 * time.Hour),
+			RuleID:   "fim_critical",
+			Severity: "critical",
+			DedupKey: "fim_critical:db-server-01:critical",
+			Payload: map[string]interface{}{
+				"message":   "Critical system file modified",
+				"source":    "file_monitor",
+				"category":  "file",
+				"subtype":   "modify",
+				"file_path": "/etc/passwd",
+				"user":      "root",
+			},
+			Status:    "acknowledged",
+			Env:       "production",
+			Host:      "db-server-01",
+			CreatedAt: time.Now().Add(-2 * time.Hour),
+			UpdatedAt: time.Now().Add(-30 * time.Minute),
+		},
+	}
+
 	response := gin.H{
-		"alerts": []interface{}{},
-		"total":  0,
+		"alerts": alerts,
+		"total":  len(alerts),
 		"limit":  limit,
 		"cursor": cursor,
 		"filters": gin.H{
@@ -89,16 +135,27 @@ func (h *AlertsHandler) GetAlertByID(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет запрос к базе данных
-	// Пока возвращаем заглушку
-	alert := gin.H{
-		"id":         alertID,
-		"rule_id":    "example_rule",
-		"severity":   "high",
-		"host":       "example-host",
-		"env":        "production",
-		"status":     "new",
-		"created_at": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
-		"updated_at": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+	// Пока возвращаем пример данных с правильной структурой
+	// TODO: Добавить кэширование алертов
+	alert := &models.Alert{
+		ID:       alertID,
+		TS:       time.Now().Add(-1 * time.Hour),
+		RuleID:   "login_bruteforce",
+		Severity: "high",
+		DedupKey: "login_bruteforce:example-host:high",
+		Payload: map[string]interface{}{
+			"message":  "Multiple failed SSH login attempts detected",
+			"source":   "ssh_auth",
+			"category": "auth",
+			"subtype":  "login_failed",
+			"attempts": 12,
+			"user":     "admin",
+		},
+		Status:    "new",
+		Env:       "production",
+		Host:      "example-host",
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+		UpdatedAt: time.Now().Add(-1 * time.Hour),
 	}
 
 	c.JSON(http.StatusOK, alert)
@@ -147,11 +204,12 @@ func (h *AlertsHandler) UpdateAlertStatus(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет обновление в базе данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с обновленными данными
+	// TODO: Добавить логирование изменений статуса
 	response := gin.H{
-		"alert_id": alertID,
-		"status":   updateRequest.Status,
-		"note":     updateRequest.Note,
+		"alert_id":   alertID,
+		"status":     updateRequest.Status,
+		"note":       updateRequest.Note,
 		"updated_at": time.Now().Format(time.RFC3339),
 		"message":    "Alert status updated successfully",
 	}
@@ -171,10 +229,11 @@ func (h *AlertsHandler) DeleteAlert(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет удаление из базы данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с подтверждением
+	// TODO: Добавить мягкое удаление (soft delete)
 	response := gin.H{
-		"alert_id": alertID,
-		"message":  "Alert deleted successfully",
+		"alert_id":   alertID,
+		"message":    "Alert deleted successfully",
 		"deleted_at": time.Now().Format(time.RFC3339),
 	}
 
@@ -186,7 +245,7 @@ func (h *AlertsHandler) GetAlertStats(c *gin.Context) {
 	// Получаем параметры для статистики
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
-	groupBy := c.Query("group_by") // severity, rule_id, host, env
+	_ = c.Query("group_by") // severity, rule_id, host, env
 
 	// Парсим даты
 	var from, to time.Time
@@ -204,7 +263,8 @@ func (h *AlertsHandler) GetAlertStats(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет агрегация по базе данных
-	// Пока возвращаем заглушку
+	// Пока возвращаем пример статистики
+	// TODO: Добавить кэширование статистики
 	stats := gin.H{
 		"period": gin.H{
 			"from": from.Format(time.RFC3339),
@@ -218,10 +278,10 @@ func (h *AlertsHandler) GetAlertStats(c *gin.Context) {
 			"low":      30,
 		},
 		"by_status": gin.H{
-			"new":           45,
-			"acknowledged":  60,
-			"resolved":      30,
-			"closed":        15,
+			"new":          45,
+			"acknowledged": 60,
+			"resolved":     30,
+			"closed":       15,
 		},
 		"by_rule": gin.H{
 			"login_bruteforce": 80,
@@ -280,7 +340,8 @@ func (h *AlertsHandler) BulkUpdateAlerts(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет массовое обновление в базе данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с результатами
+	// TODO: Добавить транзакционное обновление
 	response := gin.H{
 		"updated_count": len(bulkRequest.AlertIDs),
 		"status":        bulkRequest.Status,

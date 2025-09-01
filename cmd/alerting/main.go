@@ -8,11 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/novasec/novasec/internal/alerting"
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
+	"novasec/internal/alerting"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
 )
 
 func main() {
@@ -23,7 +24,15 @@ func main() {
 	}
 
 	// Initialize logger
-	logger, err := logging.NewLogger(cfg.Logging)
+	logger, err := logging.NewLogger(logging.Config{
+		Level:      cfg.Logging.Level,
+		Format:     cfg.Logging.Format,
+		Output:     cfg.Logging.Output,
+		MaxSize:    cfg.Logging.MaxSize,
+		MaxBackups: cfg.Logging.MaxBackups,
+		MaxAge:     cfg.Logging.MaxAge,
+		Compress:   cfg.Logging.Compress,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -31,7 +40,15 @@ func main() {
 	logger.Logger.Info("Starting NovaSec Alerting Service")
 
 	// Initialize NATS client
-	natsClient, err := nats.NewClient(&cfg.NATS)
+	natsClient, err := nats.NewClient(nats.Config{
+		URLs:        cfg.NATS.URLs,
+		ClusterID:   cfg.NATS.ClusterID,
+		ClientID:    cfg.NATS.ClientID,
+		Credentials: cfg.NATS.Credentials,
+		JWT:         cfg.NATS.JWT,
+		NKey:        cfg.NATS.NKey,
+		Timeout:     30 * time.Second,
+	})
 	if err != nil {
 		logger.Logger.Fatal("Failed to initialize NATS client", err)
 	}

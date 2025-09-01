@@ -1,7 +1,7 @@
 // filename: internal/normalizer/parsers/interface.go
 package parsers
 
-import "github.com/novasec/novasec/internal/models"
+import "novasec/internal/models"
 
 // Parser интерфейс для всех парсеров событий // v1.0
 type Parser interface {
@@ -75,4 +75,64 @@ func (r *ParserRegistry) GetParserForCategory(category string) Parser {
 		}
 	}
 	return nil
+}
+
+// ParseEvent реализует интерфейс Parser для ParserRegistry
+func (r *ParserRegistry) ParseEvent(rawEvent *models.Event) (*models.Event, error) {
+	// Находим подходящий парсер для источника
+	parser := r.GetParserForSource(rawEvent.Source)
+	if parser == nil {
+		// Если парсер не найден, возвращаем событие как есть
+		return rawEvent, nil
+	}
+
+	return parser.ParseEvent(rawEvent)
+}
+
+// GetSupportedSources возвращает все поддерживаемые источники
+func (r *ParserRegistry) GetSupportedSources() []string {
+	sources := make(map[string]bool)
+	for _, parser := range r.parsers {
+		for _, source := range parser.GetSupportedSources() {
+			sources[source] = true
+		}
+	}
+
+	result := make([]string, 0, len(sources))
+	for source := range sources {
+		result = append(result, source)
+	}
+	return result
+}
+
+// GetSupportedCategories возвращает все поддерживаемые категории
+func (r *ParserRegistry) GetSupportedCategories() []string {
+	categories := make(map[string]bool)
+	for _, parser := range r.parsers {
+		for _, category := range parser.GetSupportedCategories() {
+			categories[category] = true
+		}
+	}
+
+	result := make([]string, 0, len(categories))
+	for category := range categories {
+		result = append(result, category)
+	}
+	return result
+}
+
+// GetSupportedSubtypes возвращает все поддерживаемые подтипы
+func (r *ParserRegistry) GetSupportedSubtypes() []string {
+	subtypes := make(map[string]bool)
+	for _, parser := range r.parsers {
+		for _, subtype := range parser.GetSupportedSubtypes() {
+			subtypes[subtype] = true
+		}
+	}
+
+	result := make([]string, 0, len(subtypes))
+	for subtype := range subtypes {
+		result = append(result, subtype)
+	}
+	return result
 }

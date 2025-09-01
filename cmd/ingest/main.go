@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/ingest/server"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
+	"novasec/internal/ingest/server"
 )
 
 var (

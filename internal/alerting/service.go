@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
+	"novasec/internal/models"
 )
 
 // Service represents the alerting service
@@ -155,6 +155,8 @@ func (s *Service) sendToChannel(alert *models.Alert, channel string) error {
 func (s *Service) sendEmail(alert *models.Alert) error {
 	// Получаем конфигурацию SMTP из config
 	// В реальной реализации здесь будет доступ к конфигурации SMTP
+	// Пока используем базовую логику
+	// TODO: Добавить доступ к конфигурации SMTP
 
 	// Здесь будет реализация отправки email
 	// Пока логируем
@@ -166,6 +168,8 @@ func (s *Service) sendEmail(alert *models.Alert) error {
 func (s *Service) sendTelegram(alert *models.Alert) error {
 	// Получаем конфигурацию Telegram из config
 	// В реальной реализации здесь будет доступ к конфигурации Telegram
+	// Пока используем базовую логику
+	// TODO: Добавить доступ к конфигурации Telegram
 
 	// Здесь будет реализация отправки в Telegram
 	// Пока логируем
@@ -177,6 +181,8 @@ func (s *Service) sendTelegram(alert *models.Alert) error {
 func (s *Service) sendWebhook(alert *models.Alert) error {
 	// Получаем конфигурацию webhook из config
 	// В реальной реализации здесь будет доступ к конфигурации webhook
+	// Пока используем базовую логику
+	// TODO: Добавить доступ к конфигурации webhook
 
 	// Здесь будет реализация отправки webhook
 	// Пока логируем

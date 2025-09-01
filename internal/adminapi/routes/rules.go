@@ -2,19 +2,23 @@
 package routes
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"novasec/internal/common/logging"
+	"novasec/internal/models"
+
 	"github.com/gin-gonic/gin"
-	"github.com/novasec/novasec/internal/common/logging"
 )
 
 // RulesHandler обработчик для работы с правилами корреляции // v1.0
 type RulesHandler struct {
 	logger *logging.Logger
 	// В реальной реализации здесь будет сервис для работы с правилами
+	// Пока используем только logger
+	// TODO: Добавить сервис для работы с правилами
+	// TODO: Добавить валидацию правил
 }
 
 // NewRulesHandler создает новый обработчик правил // v1.0
@@ -48,27 +52,66 @@ func (h *RulesHandler) GetRules(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет запрос к базе данных
-	// Пока возвращаем заглушку
-	rules := []gin.H{
+	// Пока возвращаем пример данных с правильной структурой
+	// TODO: Добавить реальные запросы к базе данных
+	// TODO: Добавить пагинацию и фильтрацию
+	rules := []models.Rule{
 		{
-			"id":         "login_bruteforce",
-			"name":       "SSH Brute Force Detection",
-			"version":    1,
-			"enabled":    true,
-			"severity":   "high",
-			"description": "Detects multiple failed SSH login attempts",
-			"created_at": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
-			"updated_at": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+			ID:      "login_bruteforce",
+			Name:    "SSH Brute Force Detection",
+			Version: 1,
+			Enabled: true,
+			YAML: `rule:
+  id: login_bruteforce
+  name: "SSH Brute Force Detection"
+  severity: high
+  description: "Detects multiple failed SSH login attempts"
+  events:
+    - category: auth
+      subtype: login_failed
+      source: ssh_auth
+  conditions:
+    - field: user
+      operator: count_unique
+      threshold: 5
+      window: 5m
+  actions:
+    - type: alert
+      severity: high
+      message: "Multiple failed SSH login attempts detected for user {{user}}"
+    - type: block_ip
+      field: network.src_ip
+      duration: 1h`,
+			CreatedAt: time.Now().Add(-24 * time.Hour),
+			UpdatedAt: time.Now().Add(-24 * time.Hour),
 		},
 		{
-			"id":         "fim_critical",
-			"name":       "Critical File Changes",
-			"version":    1,
-			"enabled":    true,
-			"severity":   "critical",
-			"description": "Detects changes to critical system files",
-			"created_at": time.Now().Add(-48 * time.Hour).Format(time.RFC3339),
-			"updated_at": time.Now().Add(-48 * time.Hour).Format(time.RFC3339),
+			ID:      "fim_critical",
+			Name:    "Critical File Changes",
+			Version: 1,
+			Enabled: true,
+			YAML: `rule:
+  id: fim_critical
+  name: "Critical File Changes"
+  severity: critical
+  description: "Detects changes to critical system files"
+  events:
+    - category: file
+      subtype: modify
+      source: file_monitor
+  conditions:
+    - field: file.path
+      operator: matches
+      value: "/etc/(passwd|shadow|sudoers|hosts|resolv.conf)"
+  actions:
+    - type: alert
+      severity: critical
+      message: "Critical system file {{file.path}} was modified"
+    - type: block_user
+      field: user.name
+      duration: 24h`,
+			CreatedAt: time.Now().Add(-48 * time.Hour),
+			UpdatedAt: time.Now().Add(-48 * time.Hour),
 		},
 	}
 
@@ -78,7 +121,7 @@ func (h *RulesHandler) GetRules(c *gin.Context) {
 		"limit":  limit,
 		"offset": offset,
 		"filters": gin.H{
-			"enabled": enabledStr,
+			"enabled":  enabledStr,
 			"severity": severity,
 		},
 	}
@@ -98,17 +141,34 @@ func (h *RulesHandler) GetRuleByID(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет запрос к базе данных
-	// Пока возвращаем заглушку
-	rule := gin.H{
-		"id":         ruleID,
-		"name":       "Example Rule",
-		"version":    1,
-		"enabled":    true,
-		"severity":   "high",
-		"description": "Example rule description",
-		"yaml":       "# Example YAML rule\nrule:\n  id: " + ruleID + "\n  severity: high",
-		"created_at": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
-		"updated_at": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+	// Пока возвращаем пример данных с правильной структурой
+	// TODO: Добавить реальные запросы к базе данных
+	// TODO: Добавить кэширование правил
+	rule := &models.Rule{
+		ID:      ruleID,
+		Name:    "Example Rule",
+		Version: 1,
+		Enabled: true,
+		YAML: `rule:
+  id: ` + ruleID + `
+  name: "Example Rule"
+  severity: high
+  description: "Example rule description"
+  events:
+    - category: auth
+      subtype: login_failed
+      source: ssh_auth
+  conditions:
+    - field: user
+      operator: count_unique
+      threshold: 3
+      window: 2m
+  actions:
+    - type: alert
+      severity: high
+      message: "Example alert for rule {{rule_id}}"`,
+		CreatedAt: time.Now().Add(-24 * time.Hour),
+		UpdatedAt: time.Now().Add(-24 * time.Hour),
 	}
 
 	c.JSON(http.StatusOK, rule)
@@ -145,7 +205,8 @@ func (h *RulesHandler) CreateRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет сохранение в базу данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с созданным правилом
+	// TODO: Добавить валидацию YAML перед сохранением
 	response := gin.H{
 		"message":    "Rule created successfully",
 		"id":         ruleID,
@@ -178,7 +239,8 @@ func (h *RulesHandler) UpdateRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет обновление в базе данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с обновленными данными
+	// TODO: Добавить проверку версии правила
 	response := gin.H{
 		"message":    "Rule updated successfully",
 		"id":         ruleID,
@@ -201,7 +263,8 @@ func (h *RulesHandler) DeleteRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет удаление из базы данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с подтверждением
+	// TODO: Добавить проверку зависимостей перед удалением
 	response := gin.H{
 		"message":    "Rule deleted successfully",
 		"id":         ruleID,
@@ -214,7 +277,7 @@ func (h *RulesHandler) DeleteRule(c *gin.Context) {
 // TestRule тестирует правило на тестовых данных // v1.0
 func (h *RulesHandler) TestRule(c *gin.Context) {
 	var testRequest struct {
-		RuleID       string `json:"rule_id" binding:"required"`
+		RuleID        string `json:"rule_id" binding:"required"`
 		EventsFixture string `json:"events_fixture" binding:"required"`
 	}
 
@@ -227,7 +290,8 @@ func (h *RulesHandler) TestRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет тестирование правила
-	// Пока возвращаем заглушку
+	// Пока возвращаем пример результатов тестирования
+	// TODO: Добавить реальное выполнение правил на тестовых данных
 	testResults := gin.H{
 		"rule_id":          testRequest.RuleID,
 		"events_fixture":   testRequest.EventsFixture,
@@ -259,7 +323,8 @@ func (h *RulesHandler) EnableRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет обновление статуса в базе данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с обновленным статусом
+	// TODO: Добавить логирование изменений статуса
 	response := gin.H{
 		"message":    "Rule enabled successfully",
 		"id":         ruleID,
@@ -282,7 +347,8 @@ func (h *RulesHandler) DisableRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет обновление статуса в базе данных
-	// Пока возвращаем успешный ответ
+	// Пока возвращаем успешный ответ с обновленным статусом
+	// TODO: Добавить логирование изменений статуса
 	response := gin.H{
 		"message":    "Rule disabled successfully",
 		"id":         ruleID,
@@ -324,14 +390,15 @@ func (h *RulesHandler) GetRuleStats(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет агрегация по базе данных
-	// Пока возвращаем заглушку
+	// Пока возвращаем пример статистики
+	// TODO: Добавить кэширование статистики
 	stats := gin.H{
 		"rule_id": ruleID,
 		"period": gin.H{
 			"from": from.Format(time.RFC3339),
 			"to":   to.Format(time.RFC3339),
 		},
-		"total_alerts":     45,
+		"total_alerts": 45,
 		"alerts_by_severity": gin.H{
 			"critical": 5,
 			"high":     25,
@@ -339,14 +406,14 @@ func (h *RulesHandler) GetRuleStats(c *gin.Context) {
 			"low":      5,
 		},
 		"alerts_by_status": gin.H{
-			"new":           15,
-			"acknowledged":  20,
-			"resolved":      8,
-			"closed":        2,
+			"new":          15,
+			"acknowledged": 20,
+			"resolved":     8,
+			"closed":       2,
 		},
 		"performance": gin.H{
-			"avg_execution_time": "12ms",
-			"events_per_second":  150,
+			"avg_execution_time":  "12ms",
+			"events_per_second":   150,
 			"false_positive_rate": "2.5%",
 		},
 	}
@@ -369,11 +436,12 @@ func (h *RulesHandler) ValidateRule(c *gin.Context) {
 	}
 
 	// В реальной реализации здесь будет валидация YAML
-	// Пока возвращаем заглушку
+	// Пока возвращаем пример результатов валидации
+	// TODO: Добавить реальную валидацию YAML схемы
 	validationResult := gin.H{
-		"valid":      true,
-		"errors":     []string{},
-		"warnings":   []string{},
+		"valid":    true,
+		"errors":   []string{},
+		"warnings": []string{},
 		"rule_info": gin.H{
 			"id":          "validated_rule",
 			"severity":    "high",

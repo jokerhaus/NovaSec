@@ -8,11 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/novasec/novasec/internal/common/config"
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/models"
-	"github.com/novasec/novasec/internal/normalizer/parsers"
+	"novasec/internal/common/config"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
+	"novasec/internal/models"
+	"novasec/internal/normalizer/parsers"
 )
 
 // Service represents the normalizer service

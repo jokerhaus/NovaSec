@@ -8,44 +8,46 @@ import (
 	"sync"
 	"time"
 
-	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/correlator/dsl"
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/common/logging"
+	"novasec/internal/common/nats"
+	"novasec/internal/correlator/dsl"
+	"novasec/internal/models"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Engine представляет движок корреляции // v1.0
 type Engine struct {
-	config      *Config
-	logger      *logging.Logger
-	nats        *nats.Client
-	compiler    *dsl.Compiler
-	rules       map[string]*dsl.CompiledRule
-	state       StateManager
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
-	mu          sync.RWMutex
+	config   *Config
+	logger   *logging.Logger
+	nats     *nats.Client
+	compiler *dsl.Compiler
+	rules    map[string]*dsl.CompiledRule
+	state    StateManager
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	mu       sync.RWMutex
 }
 
 // Config конфигурация движка корреляции // v1.0
 type Config struct {
-	MaxWorkers       int           `yaml:"max_workers"`
-	EventBufferSize  int           `yaml:"event_buffer_size"`
+	MaxWorkers        int           `yaml:"max_workers"`
+	EventBufferSize   int           `yaml:"event_buffer_size"`
 	RuleCheckInterval time.Duration `yaml:"rule_check_interval"`
-	AlertTTL         time.Duration `yaml:"alert_ttl"`
+	AlertTTL          time.Duration `yaml:"alert_ttl"`
 }
 
 // StateManager интерфейс для управления состоянием // v1.0
 type StateManager interface {
 	// GetWindowState возвращает состояние окна для правила и группы
 	GetWindowState(ruleID, groupKey string) (*dsl.WindowState, error)
-	
+
 	// UpdateWindowState обновляет состояние окна
 	UpdateWindowState(ruleID, groupKey string, state *dsl.WindowState) error
-	
+
 	// CleanupExpiredWindows очищает истекшие окна
 	CleanupExpiredWindows() error
-	
+
 	// GetStats возвращает статистику состояния
 	GetStats() map[string]interface{}
 }
@@ -68,7 +70,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.logger.Logger.Info("Starting correlation engine")
 
 	// Подписываемся на нормализованные события
-	err := e.nats.SubscribeToEvents("events.normalized", e.handleNormalizedEvent)
+	err := e.nats.SubscribeToEvents("events.normalized", func(data []byte) {
+		if err := e.handleNormalizedEvent(data); err != nil {
+			e.logger.Logger.WithError(err).Error("Failed to handle normalized event")
+		}
+	})
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to events.normalized: %w", err)
 	}
@@ -108,8 +114,14 @@ func (e *Engine) LoadRule(ruleID string, yamlData string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Парсим YAML в Rule
+	var rule dsl.Rule
+	if err := yaml.Unmarshal([]byte(yamlData), &rule); err != nil {
+		return fmt.Errorf("failed to parse rule YAML: %w", err)
+	}
+
 	// Компилируем правило
-	compiledRule, err := e.compiler.CompileRule(ruleID, yamlData)
+	compiledRule, err := e.compiler.CompileRule(&rule)
 	if err != nil {
 		return fmt.Errorf("failed to compile rule %s: %w", ruleID, err)
 	}
@@ -190,7 +202,7 @@ func (e *Engine) handleNormalizedEvent(data []byte) error {
 // processEventWithRule обрабатывает событие с конкретным правилом // v1.0
 func (e *Engine) processEventWithRule(event *models.Event, rule *dsl.CompiledRule) error {
 	// Проверяем, соответствует ли событие условиям правила
-	if !rule.EventMatcher.Match(event) {
+	if !rule.Matcher.Match(event) {
 		return nil
 	}
 
@@ -224,8 +236,8 @@ func (e *Engine) processEventWithRule(event *models.Event, rule *dsl.CompiledRul
 // createAlert создает алерт на основе сработавшего правила // v1.0
 func (e *Engine) createAlert(rule *dsl.CompiledRule, event *models.Event, groupKey string) error {
 	// Генерируем ключ дедупликации
-	dedupKey := fmt.Sprintf("%s:%s:%s", 
-		rule.Rule.ID, 
+	dedupKey := fmt.Sprintf("%s:%s:%s",
+		rule.Rule.ID,
 		groupKey,
 		rule.Rule.Severity)
 
@@ -261,9 +273,9 @@ func (e *Engine) createAlert(rule *dsl.CompiledRule, event *models.Event, groupK
 	}
 
 	e.logger.Logger.WithFields(map[string]interface{}{
-		"alert_id": alert.ID,
-		"rule_id":  rule.Rule.ID,
-		"severity": rule.Rule.Severity,
+		"alert_id":  alert.ID,
+		"rule_id":   rule.Rule.ID,
+		"severity":  rule.Rule.Severity,
 		"group_key": groupKey,
 	}).Info("Alert created and published")
 
@@ -279,16 +291,29 @@ func (e *Engine) worker(ctx context.Context, id int) {
 	}).Info("Correlation worker started")
 
 	// В реальной реализации здесь будет обработка событий из очереди
-	// Пока просто ждем сигнала остановки
-	select {
-	case <-ctx.Done():
-		e.logger.Logger.WithFields(map[string]interface{}{
-			"worker_id": id,
-		}).Info("Worker context cancelled")
-	case <-e.stopChan:
-		e.logger.Logger.WithFields(map[string]interface{}{
-			"worker_id": id,
-		}).Info("Worker stop signal received")
+	// Пока используем простую логику ожидания
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker context cancelled")
+			return
+		case <-e.stopChan:
+			e.logger.Logger.WithFields(map[string]interface{}{
+				"worker_id": id,
+			}).Info("Worker stop signal received")
+			return
+		case <-ticker.C:
+			// В реальной реализации здесь будет обработка событий из очереди
+			// Пока просто проверяем состояние каждые 100ms
+			// TODO: Добавить логику обработки событий из очереди
+			// TODO: Добавить метрики производительности
+			continue
+		}
 	}
 }
 
@@ -323,11 +348,11 @@ func (e *Engine) GetStats() map[string]interface{} {
 	defer e.mu.RUnlock()
 
 	stats := map[string]interface{}{
-		"status":        "running",
-		"workers":       e.config.MaxWorkers,
-		"loaded_rules":  len(e.rules),
-		"event_buffer":  e.config.EventBufferSize,
-		"alert_ttl":     e.config.AlertTTL.String(),
+		"status":       "running",
+		"workers":      e.config.MaxWorkers,
+		"loaded_rules": len(e.rules),
+		"event_buffer": e.config.EventBufferSize,
+		"alert_ttl":    e.config.AlertTTL.String(),
 	}
 
 	// Добавляем статистику состояния

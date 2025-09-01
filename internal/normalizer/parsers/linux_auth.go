@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // LinuxAuthParser парсер для логов аутентификации Linux (SSH, sudo, su) // v1.0

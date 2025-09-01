@@ -21,11 +21,13 @@ type Config struct {
 
 // ServerConfig представляет конфигурацию сервера
 type ServerConfig struct {
-	Host         string        `mapstructure:"host"`
-	Port         int           `mapstructure:"port"`
-	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
+	Host          string          `mapstructure:"host"`
+	Port          int             `mapstructure:"port"`
+	ReadTimeout   time.Duration   `mapstructure:"read_timeout"`
+	WriteTimeout  time.Duration   `mapstructure:"write_timeout"`
+	IdleTimeout   time.Duration   `mapstructure:"idle_timeout"`
+	RateLimit     RateLimitConfig `mapstructure:"rate_limit"`
+	BodySizeLimit int64           `mapstructure:"body_size_limit"`
 }
 
 // NATSConfig представляет конфигурацию NATS
@@ -83,6 +85,13 @@ type LoggingConfig struct {
 	MaxBackups int    `mapstructure:"max_backups"`
 	MaxAge     int    `mapstructure:"max_age"`
 	Compress   bool   `mapstructure:"compress"`
+}
+
+// RateLimitConfig представляет конфигурацию rate limiting
+type RateLimitConfig struct {
+	RequestsPerMinute int           `mapstructure:"requests_per_minute"`
+	BurstSize         int           `mapstructure:"burst_size"`
+	BlockDuration     time.Duration `mapstructure:"block_duration"`
 }
 
 // TLSConfig представляет конфигурацию TLS

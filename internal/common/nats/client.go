@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nkeys"
 )
 
 // Client представляет клиент NATS
@@ -51,13 +50,7 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	if config.JWT != "" && config.NKey != "" {
-		// Загружаем NKey
-		nkey, err := nkeys.FromSeed([]byte(config.NKey))
-		if err != nil {
-			return nil, fmt.Errorf("failed to load NKey: %w", err)
-		}
-
-		// Создаем JWT
+		// Создаем JWT с NKey
 		opts = append(opts, nats.UserJWTAndSeed(config.JWT, config.NKey))
 	}
 

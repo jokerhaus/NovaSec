@@ -3,10 +3,11 @@ package state
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/novasec/novasec/internal/correlator/dsl"
+	"novasec/internal/correlator/dsl"
 )
 
 // MemoryStateManager реализует StateManager в памяти // v1.0
@@ -29,7 +30,7 @@ func (m *MemoryStateManager) GetWindowState(ruleID, groupKey string) (*dsl.Windo
 
 	key := m.makeKey(ruleID, groupKey)
 	window, exists := m.windows[key]
-	
+
 	if !exists {
 		// Создаем новое состояние окна
 		window = &dsl.WindowState{
@@ -116,7 +117,7 @@ func (m *MemoryStateManager) GetWindowCount() int {
 func (m *MemoryStateManager) ClearAllWindows() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Очищаем map
 	for k := range m.windows {
 		delete(m.windows, k)
@@ -130,20 +131,20 @@ func (m *MemoryStateManager) GetWindowInfo(ruleID, groupKey string) (map[string]
 
 	key := m.makeKey(ruleID, groupKey)
 	window, exists := m.windows[key]
-	
+
 	if !exists {
 		return nil, fmt.Errorf("window not found for rule %s, group %s", ruleID, groupKey)
 	}
 
 	info := map[string]interface{}{
-		"rule_id":     ruleID,
-		"group_key":   groupKey,
-		"start_time":  window.StartTime,
-		"end_time":    window.EndTime,
-		"event_count": window.EventCount,
+		"rule_id":      ruleID,
+		"group_key":    groupKey,
+		"start_time":   window.StartTime,
+		"end_time":     window.EndTime,
+		"event_count":  window.EventCount,
 		"unique_count": len(window.UniqueCount),
-		"last_event":  window.LastEvent,
-		"is_expired":  time.Now().After(window.EndTime),
+		"last_event":   window.LastEvent,
+		"is_expired":   time.Now().After(window.EndTime),
 	}
 
 	return info, nil
@@ -155,20 +156,20 @@ func (m *MemoryStateManager) ListWindows() []map[string]interface{} {
 	defer m.mu.RUnlock()
 
 	windows := make([]map[string]interface{}, 0, len(m.windows))
-	
+
 	for key, window := range m.windows {
 		// Парсим ключ для извлечения rule_id и group_key
 		parts := m.parseKey(key)
 		if len(parts) == 2 {
 			info := map[string]interface{}{
-				"rule_id":     parts[0],
-				"group_key":   parts[1],
-				"start_time":  window.StartTime,
-				"end_time":    window.EndTime,
-				"event_count": window.EventCount,
+				"rule_id":      parts[0],
+				"group_key":    parts[1],
+				"start_time":   window.StartTime,
+				"end_time":     window.EndTime,
+				"event_count":  window.EventCount,
 				"unique_count": len(window.UniqueCount),
-				"last_event":  window.LastEvent,
-				"is_expired":  time.Now().After(window.EndTime),
+				"last_event":   window.LastEvent,
+				"is_expired":   time.Now().After(window.EndTime),
 			}
 			windows = append(windows, info)
 		}
@@ -179,8 +180,14 @@ func (m *MemoryStateManager) ListWindows() []map[string]interface{} {
 
 // parseKey парсит ключ окна // v1.0
 func (m *MemoryStateManager) parseKey(key string) []string {
-	// Простой парсинг по двоеточию
+	// Парсим ключ по двоеточию
 	// В реальной реализации может потребоваться более сложная логика
 	// если group_key содержит двоеточия
-	return []string{key[:len(key)/2], key[len(key)/2+1:]}
+	// TODO: Добавить более сложную логику парсинга ключей
+	parts := strings.Split(key, ":")
+	if len(parts) >= 2 {
+		return parts
+	}
+	// Fallback для некорректных ключей
+	return []string{"unknown", "unknown"}
 }

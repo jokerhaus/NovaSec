@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // Compiler компилирует YAML правила в исполняемые структуры // v1.0
@@ -22,32 +22,6 @@ func NewCompiler() *Compiler {
 	return &Compiler{
 		compiledRules: make(map[string]*CompiledRule),
 	}
-}
-
-// ValidateRule валидирует правило перед компиляцией // v1.0
-func ValidateRule(rule *Rule) error {
-	if rule.ID == "" {
-		return fmt.Errorf("rule ID is required")
-	}
-	if rule.Name == "" {
-		return fmt.Errorf("rule name is required")
-	}
-	if rule.Severity == "" {
-		return fmt.Errorf("rule severity is required")
-	}
-	if len(rule.Conditions) == 0 {
-		return fmt.Errorf("rule must have at least one condition")
-	}
-	if rule.Window.Duration == 0 {
-		return fmt.Errorf("window duration is required")
-	}
-	if rule.Threshold.Count == 0 {
-		return fmt.Errorf("threshold count is required")
-	}
-	if len(rule.Actions) == 0 {
-		return fmt.Errorf("rule must have at least one action")
-	}
-	return nil
 }
 
 // CompileRule компилирует правило в исполняемую структуру // v1.0
@@ -100,14 +74,13 @@ func (c *Compiler) createEventMatcher(rule *Rule) (EventMatcher, error) {
 
 // createWindowEvaluator создает оценщик временных окон // v1.0
 func (c *Compiler) createWindowEvaluator(rule *Rule) (WindowEvaluator, error) {
-	evaluator := &SlidingWindowEvaluator{
-		ruleID:     rule.ID,
-		windowSize: rule.Window.Duration,
-		threshold:  rule.Threshold,
-		groupBy:    rule.GroupBy,
-		sliding:    rule.Window.Sliding,
-	}
-
+	evaluator := NewSlidingWindowEvaluator(
+		rule.ID,
+		rule.Window.Duration,
+		rule.Threshold,
+		rule.GroupBy,
+		rule.Window.Sliding,
+	)
 	return evaluator, nil
 }
 
@@ -388,185 +361,4 @@ func (m *CompositeEventMatcher) compareNumeric(actual, operator, expected string
 	}
 }
 
-// SlidingWindowEvaluator оценщик скользящих временных окон // v1.0
-type SlidingWindowEvaluator struct {
-	ruleID     string
-	windowSize time.Duration
-	threshold  ThresholdConfig
-	groupBy    []string
-	sliding    bool
-	events     map[string][]*models.Event // группировка по ключу
-}
-
-// AddEvent добавляет событие в окно // v1.0
-func (e *SlidingWindowEvaluator) AddEvent(event *models.Event) bool {
-	key := e.generateGroupKey(event)
-
-	// Очищаем старые события
-	e.cleanupOldEvents(key)
-
-	// Добавляем новое событие
-	e.events[key] = append(e.events[key], event)
-	return true
-}
-
-// IsTriggered проверяет, сработало ли правило // v1.0
-func (e *SlidingWindowEvaluator) IsTriggered() bool {
-	for key, events := range e.events {
-		if e.checkThreshold(key, events) {
-			return true
-		}
-	}
-	return false
-}
-
-// GetTriggeredGroups возвращает группы, которые сработали // v1.0
-func (e *SlidingWindowEvaluator) GetTriggeredGroups() []string {
-	var triggered []string
-
-	for key, events := range e.events {
-		if e.checkThreshold(key, events) {
-			triggered = append(triggered, key)
-		}
-	}
-
-	return triggered
-}
-
-// GetEventsForGroup возвращает события для конкретной группы // v1.0
-func (e *SlidingWindowEvaluator) GetEventsForGroup(groupKey string) []*models.Event {
-	return e.events[groupKey]
-}
-
-// Reset сбрасывает состояние оценщика // v1.0
-func (e *SlidingWindowEvaluator) Reset() {
-	e.events = make(map[string][]*models.Event)
-}
-
-// generateGroupKey генерирует ключ группировки // v1.0
-func (e *SlidingWindowEvaluator) generateGroupKey(event *models.Event) string {
-	if len(e.groupBy) == 0 {
-		return "default"
-	}
-
-	var parts []string
-	for _, field := range e.groupBy {
-		value := e.extractFieldValue(event, field)
-		parts = append(parts, fmt.Sprintf("%s=%s", field, value))
-	}
-
-	return strings.Join(parts, "|")
-}
-
-// extractFieldValue извлекает значение поля для группировки // v1.0
-func (e *SlidingWindowEvaluator) extractFieldValue(event *models.Event, field string) string {
-	switch field {
-	case "host":
-		return event.Host
-	case "agent_id":
-		return event.AgentID
-	case "env":
-		return event.Env
-	case "source":
-		return event.Source
-	case "user_name":
-		return event.UserName
-	case "user_uid":
-		if event.UserUID != nil {
-			return strconv.Itoa(*event.UserUID)
-		}
-		return ""
-	case "src_ip":
-		return event.SrcIP
-	case "src_port":
-		if event.SrcPort != nil {
-			return strconv.Itoa(*event.SrcPort)
-		}
-		return ""
-	case "dst_ip":
-		return event.DstIP
-	case "dst_port":
-		if event.DstPort != nil {
-			return strconv.Itoa(*event.DstPort)
-		}
-		return ""
-	case "proto":
-		return event.Proto
-	case "file_path":
-		return event.FilePath
-	case "process_name":
-		return event.ProcessName
-	case "process_pid":
-		if event.ProcessPID != nil {
-			return strconv.Itoa(*event.ProcessPID)
-		}
-		return ""
-	case "sha256":
-		return event.SHA256
-	case "geo":
-		return event.Geo
-	case "asn":
-		if event.ASN != nil {
-			return strconv.Itoa(*event.ASN)
-		}
-		return ""
-	case "ioc":
-		return event.IOC
-	case "category":
-		return event.Category
-	case "subtype":
-		return event.Subtype
-	case "severity":
-		return event.Severity
-	case "message":
-		return event.Message
-	default:
-		if event.Labels != nil {
-			if value, exists := event.Labels[field]; exists {
-				return value
-			}
-		}
-		return ""
-	}
-}
-
-// cleanupOldEvents удаляет события, выходящие за пределы окна // v1.0
-func (e *SlidingWindowEvaluator) cleanupOldEvents(groupKey string) {
-	events := e.events[groupKey]
-	cutoff := time.Now().Add(-e.windowSize)
-
-	var validEvents []*models.Event
-	for _, event := range events {
-		if event.TS.After(cutoff) {
-			validEvents = append(validEvents, event)
-		}
-	}
-
-	e.events[groupKey] = validEvents
-}
-
-// checkThreshold проверяет, достигнут ли порог // v1.0
-func (e *SlidingWindowEvaluator) checkThreshold(groupKey string, events []*models.Event) bool {
-	if len(events) < e.threshold.Count {
-		return false
-	}
-
-	if e.threshold.Type == "unique" {
-		uniqueCount := e.countUniqueEvents(events)
-		return uniqueCount >= e.threshold.Count
-	}
-
-	return len(events) >= e.threshold.Count
-}
-
-// countUniqueEvents подсчитывает уникальные события // v1.0
-func (e *SlidingWindowEvaluator) countUniqueEvents(events []*models.Event) int {
-	seen := make(map[string]bool)
-
-	for _, event := range events {
-		key := fmt.Sprintf("%s:%s:%s", event.Host, event.Source, event.Message)
-		seen[key] = true
-	}
-
-	return len(seen)
-}
+// Дублирующиеся определения SlidingWindowEvaluator удалены. Используется реализация из evaluator.go

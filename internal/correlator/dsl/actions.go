@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/novasec/novasec/internal/models"
+	"novasec/internal/models"
 )
 
 // CreateAlertAction действие создания алерта // v1.0

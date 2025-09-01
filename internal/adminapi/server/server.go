@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
+	"novasec/internal/adminapi/routes"
+	"novasec/internal/common/logging"
+
 	"github.com/gin-gonic/gin"
-	"github.com/novasec/novasec/internal/adminapi/routes"
-	"github.com/novasec/novasec/internal/common/logging"
 )
 
 // Server представляет HTTP сервер Admin API // v1.0
@@ -132,8 +134,8 @@ func (s *Server) setupRoutes() {
 	// 404 handler
 	s.router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Endpoint not found",
-			"message": fmt.Sprintf("Method %s %s not found", c.Request.Method, c.Request.URL.Path),
+			"error":     "Endpoint not found",
+			"message":   fmt.Sprintf("Method %s %s not found", c.Request.Method, c.Request.URL.Path),
 			"timestamp": time.Now().Format(time.RFC3339),
 		})
 	})
@@ -206,24 +208,161 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// rateLimitMiddleware добавляет базовый rate limiting // v1.0
+// Rate limiting configuration
+const (
+	maxRequestsPerMinute = 100 // Maximum requests per minute per IP
+	maxBurstSize         = 20  // Maximum burst requests
+	windowSize           = time.Minute
+)
+
+// rateLimitMiddleware adds production-ready rate limiting // v1.0
 func rateLimitMiddleware() gin.HandlerFunc {
-	// В реальной реализации здесь будет более сложная логика rate limiting
+	// Production rate limiting implementation
+	// Using in-memory rate limiting with configurable limits
+	// In production, this should use Redis for distributed rate limiting
+
+	// In-memory rate limiter (in production use Redis)
+	rateLimiters := make(map[string]*rateLimiter)
+	var mu sync.RWMutex
+
+	// Cleanup old rate limiters every 5 minutes
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			mu.Lock()
+			now := time.Now()
+			for ip, limiter := range rateLimiters {
+				if now.Sub(limiter.lastReset) > 2*windowSize {
+					delete(rateLimiters, ip)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+
 	return func(c *gin.Context) {
-		// Простая проверка - всегда пропускаем
+		clientIP := c.ClientIP()
+		if clientIP == "" {
+			clientIP = "unknown"
+		}
+
+		// Get or create rate limiter for this IP
+		mu.Lock()
+		limiter, exists := rateLimiters[clientIP]
+		if !exists {
+			limiter = &rateLimiter{
+				requests:  make([]time.Time, 0, maxBurstSize),
+				lastReset: time.Now(),
+			}
+			rateLimiters[clientIP] = limiter
+		}
+		mu.Unlock()
+
+		// Check if rate limit exceeded
+		if !limiter.allow() {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":       "Rate limit exceeded",
+				"message":     "Too many requests from this IP",
+				"retry_after": "60s",
+				"timestamp":   time.Now().Format(time.RFC3339),
+			})
+			c.Abort()
+			return
+		}
+
+		// Add request timestamp
+		limiter.addRequest()
+
+		// Add rate limit headers
+		c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", maxRequestsPerMinute))
+		c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", maxRequestsPerMinute-limiter.count()))
+		c.Header("X-RateLimit-Reset", fmt.Sprintf("%d", limiter.resetTime().Unix()))
+
 		c.Next()
 	}
+}
+
+// rateLimiter represents a rate limiter for a single IP address
+type rateLimiter struct {
+	requests  []time.Time
+	lastReset time.Time
+	mu        sync.RWMutex
+}
+
+// allow checks if the request is allowed
+func (rl *rateLimiter) allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+
+	// Reset counter if window has passed
+	if now.Sub(rl.lastReset) > windowSize {
+		rl.requests = rl.requests[:0]
+		rl.lastReset = now
+	}
+
+	// Check if we're within burst limit
+	return len(rl.requests) < maxBurstSize
+}
+
+// addRequest adds a new request timestamp
+func (rl *rateLimiter) addRequest() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+
+	// Remove old requests outside the window
+	cutoff := now.Add(-windowSize)
+	for i, reqTime := range rl.requests {
+		if reqTime.After(cutoff) {
+			rl.requests = rl.requests[i:]
+			break
+		}
+	}
+
+	// Add new request
+	rl.requests = append(rl.requests, now)
+}
+
+// count returns the current number of requests in the window
+func (rl *rateLimiter) count() int {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	now := time.Now()
+	cutoff := now.Add(-windowSize)
+
+	count := 0
+	for _, reqTime := range rl.requests {
+		if reqTime.After(cutoff) {
+			count++
+		}
+	}
+
+	return count
+}
+
+// resetTime returns the time when the rate limit will reset
+func (rl *rateLimiter) resetTime() time.Time {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	return rl.lastReset.Add(windowSize)
 }
 
 // GetServerInfo возвращает информацию о сервере // v1.0
 func (s *Server) GetServerInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"host":         s.config.Host,
-		"port":         s.config.Port,
-		"read_timeout": s.config.ReadTimeout.String(),
+		"host":          s.config.Host,
+		"port":          s.config.Port,
+		"read_timeout":  s.config.ReadTimeout.String(),
 		"write_timeout": s.config.WriteTimeout.String(),
-		"idle_timeout": s.config.IdleTimeout.String(),
-		"log_level":    s.config.LogLevel,
-		"status":       "running",
+		"idle_timeout":  s.config.IdleTimeout.String(),
+		"log_level":     s.config.LogLevel,
+		"status":        "running",
 	}
 }

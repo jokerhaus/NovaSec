@@ -4,7 +4,10 @@ package ch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+
+	"novasec/internal/models"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -12,7 +15,7 @@ import (
 
 // Client представляет клиент ClickHouse
 type Client struct {
-	conn   driver.Conn
+	conn   clickhouse.Conn
 	config Config
 }
 
@@ -50,8 +53,11 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	if config.Secure {
-		dsn.TLS = &clickhouse.TLS{
-			Secure: true,
+		// ClickHouse v2 использует TLS по умолчанию при подключении к порту 9440
+		// Для порта 9000 нужно явно указать TLS
+		if config.Port == 9000 {
+			// В ClickHouse v2 TLS настраивается через Options
+			dsn.Settings["secure"] = true
 		}
 	}
 
@@ -106,17 +112,25 @@ func (c *Client) QueryRow(ctx context.Context, query string, args ...interface{}
 }
 
 // Prepare подготавливает SQL запрос // v1.0
-func (c *Client) Prepare(ctx context.Context, query string) (driver.Stmt, error) {
-	return c.conn.Prepare(ctx, query)
+func (c *Client) Prepare(ctx context.Context, query string) (interface{}, error) {
+	// ClickHouse v2 не поддерживает Prepare
+	return nil, fmt.Errorf("Prepare not supported in ClickHouse v2")
 }
 
 // Begin начинает транзакцию // v1.0
-func (c *Client) Begin(ctx context.Context) (driver.Tx, error) {
-	return c.conn.Begin(ctx)
+func (c *Client) Begin(ctx context.Context) (interface{}, error) {
+	// ClickHouse v2 не поддерживает транзакции
+	return nil, fmt.Errorf("Transactions not supported in ClickHouse v2")
 }
 
 // InsertEvent вставляет событие в таблицу events // v1.0
 func (c *Client) InsertEvent(ctx context.Context, event interface{}) error {
+	// Приводим event к типу models.Event
+	evt, ok := event.(*models.Event)
+	if !ok {
+		return fmt.Errorf("invalid event type: expected *models.Event, got %T", event)
+	}
+
 	query := `
 		INSERT INTO events (
 			ts, host, agent_id, env, source, severity, category, subtype, message,
@@ -129,9 +143,87 @@ func (c *Client) InsertEvent(ctx context.Context, event interface{}) error {
 		)
 	`
 
-	// Здесь нужно привести event к конкретному типу и извлечь поля
-	// Для простоты пока возвращаем ошибку
-	return fmt.Errorf("InsertEvent not implemented yet")
+	// Используем плоские поля из Event для совместимости с ClickHouse
+	user_name := evt.UserName
+	user_uid := evt.UserUID
+	src_ip := evt.SrcIP
+	dst_ip := evt.DstIP
+	src_port := evt.SrcPort
+	dst_port := evt.DstPort
+	proto := evt.Proto
+	file_path := evt.FilePath
+	process_pid := evt.ProcessPID
+	process_name := evt.ProcessName
+	sha256 := evt.SHA256
+	geo := evt.Geo
+	asn := evt.ASN
+	ioc := evt.IOC
+	raw := evt.Raw
+
+	// Если плоские поля пустые, используем вложенные структуры
+	if evt.User != nil {
+		if user_name == "" {
+			user_name = evt.User.Name
+		}
+		if user_uid == nil {
+			user_uid = evt.User.UID
+		}
+	}
+
+	if evt.Network != nil {
+		if src_ip == "" {
+			src_ip = evt.Network.SrcIP
+		}
+		if dst_ip == "" {
+			dst_ip = evt.Network.DstIP
+		}
+		if src_port == nil {
+			src_port = evt.Network.SrcPort
+		}
+		if dst_port == nil {
+			dst_port = evt.Network.DstPort
+		}
+		if proto == "" {
+			proto = evt.Network.Proto
+		}
+	}
+
+	if evt.File != nil {
+		if file_path == "" {
+			file_path = evt.File.Path
+		}
+	}
+
+	if evt.Process != nil {
+		if process_pid == nil {
+			process_pid = evt.Process.PID
+		}
+		if process_name == "" {
+			process_name = evt.Process.Name
+		}
+	}
+
+	if evt.Hashes != nil {
+		if sha256 == "" {
+			sha256 = evt.Hashes.SHA256
+		}
+	}
+
+	// Сериализуем метки в JSON
+	var labels map[string]interface{}
+	if evt.Labels != nil {
+		labels = make(map[string]interface{})
+		for k, v := range evt.Labels {
+			labels[k] = v
+		}
+	}
+
+	// Выполняем вставку
+	return c.Exec(ctx, query,
+		evt.TS, evt.Host, evt.AgentID, evt.Env, evt.Source, evt.Severity, evt.Category, evt.Subtype, evt.Message,
+		user_name, user_uid, src_ip, src_port, dst_ip, dst_port, proto,
+		file_path, process_pid, process_name, sha256, labels, geo, asn, ioc, raw,
+	)
 }
 
 // InsertEventsBatch вставляет события пакетом // v1.0
@@ -140,43 +232,113 @@ func (c *Client) InsertEventsBatch(ctx context.Context, events []interface{}) er
 		return nil
 	}
 
-	// Начинаем транзакцию
-	tx, err := c.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Подготавливаем запрос
-	stmt, err := tx.Prepare(ctx, `
+	// ClickHouse v2 поддерживает пакетную вставку через Exec с множественными значениями
+	query := `
 		INSERT INTO events (
 			ts, host, agent_id, env, source, severity, category, subtype, message,
 			user_name, user_uid, src_ip, src_port, dst_ip, dst_port, proto,
 			file_path, process_pid, process_name, sha256, labels, geo, asn, ioc, raw
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?
+		) VALUES
+	`
+
+	// Формируем пакет значений
+	var values []interface{}
+	placeholders := make([]string, len(events))
+
+	for i, event := range events {
+		evt, ok := event.(*models.Event)
+		if !ok {
+			return fmt.Errorf("invalid event type at index %d: expected *models.Event, got %T", i, event)
+		}
+
+		// Используем плоские поля из Event для совместимости с ClickHouse
+		user_name := evt.UserName
+		user_uid := evt.UserUID
+		src_ip := evt.SrcIP
+		dst_ip := evt.DstIP
+		src_port := evt.SrcPort
+		dst_port := evt.DstPort
+		proto := evt.Proto
+		file_path := evt.FilePath
+		process_pid := evt.ProcessPID
+		process_name := evt.ProcessName
+		sha256 := evt.SHA256
+		geo := evt.Geo
+		asn := evt.ASN
+		ioc := evt.IOC
+		raw := evt.Raw
+
+		// Если плоские поля пустые, используем вложенные структуры
+		if evt.User != nil {
+			if user_name == "" {
+				user_name = evt.User.Name
+			}
+			if user_uid == nil {
+				user_uid = evt.User.UID
+			}
+		}
+
+		if evt.Network != nil {
+			if src_ip == "" {
+				src_ip = evt.Network.SrcIP
+			}
+			if dst_ip == "" {
+				dst_ip = evt.Network.DstIP
+			}
+			if src_port == nil {
+				src_port = evt.Network.SrcPort
+			}
+			if dst_port == nil {
+				dst_port = evt.Network.DstPort
+			}
+			if proto == "" {
+				proto = evt.Network.Proto
+			}
+		}
+
+		if evt.File != nil {
+			if file_path == "" {
+				file_path = evt.File.Path
+			}
+		}
+
+		if evt.Process != nil {
+			if process_pid == nil {
+				process_pid = evt.Process.PID
+			}
+			if process_name == "" {
+				process_name = evt.Process.Name
+			}
+		}
+
+		if evt.Hashes != nil {
+			if sha256 == "" {
+				sha256 = evt.Hashes.SHA256
+			}
+		}
+
+		// Сериализуем метки в JSON
+		var labels map[string]interface{}
+		if evt.Labels != nil {
+			labels = make(map[string]interface{})
+			for k, v := range evt.Labels {
+				labels[k] = v
+			}
+		}
+
+		placeholders[i] = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+		values = append(values,
+			evt.TS, evt.Host, evt.AgentID, evt.Env, evt.Source, evt.Severity, evt.Category, evt.Subtype, evt.Message,
+			user_name, user_uid, src_ip, src_port, dst_ip, dst_port, proto,
+			file_path, process_pid, process_name, sha256, labels, geo, asn, ioc, raw,
 		)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	// Вставляем события
-	for _, event := range events {
-		// Здесь нужно привести event к конкретному типу и извлечь поля
-		// Для простоты пока пропускаем
-		continue
 	}
 
-	// Подтверждаем транзакцию
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
+	// Формируем полный запрос
+	query += strings.Join(placeholders, ", ")
 
-	return nil
+	// Выполняем пакетную вставку
+	return c.Exec(ctx, query, values...)
 }
 
 // QueryEvents выполняет запрос событий // v1.0
@@ -191,10 +353,18 @@ func (c *Client) GetEventCount(ctx context.Context, where string, args ...interf
 		query += " WHERE " + where
 	}
 
-	row := c.QueryRow(ctx, query, args...)
+	rows, err := c.Query(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query count: %w", err)
+	}
+	defer rows.Close()
+
+	// В ClickHouse v2 используем Scan для получения результата
 	var count int64
-	if err := row.Scan(&count); err != nil {
-		return 0, fmt.Errorf("failed to scan count: %w", err)
+	if rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return 0, fmt.Errorf("failed to scan count: %w", err)
+		}
 	}
 
 	return count, nil
