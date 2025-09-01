@@ -191,7 +191,7 @@ INSERT INTO integrations (id, name, type, config, enabled) VALUES
 ('telegram-bot', 'Telegram Bot', 'telegram', 
  '{"bot_token": "123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", "chat_id": "-1001234567890"}', true),
 ('webhook-slack', 'Slack Webhook', 'webhook', 
- '{"url": "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX", "timeout": "10s"}', true)
+ '{"url": "SLACK_WEBHOOK_URL_PLACEHOLDER", "timeout": "10s"}', true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     type = EXCLUDED.type,
