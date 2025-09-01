@@ -1,4 +1,4 @@
-// internal/common/logging/logger.go
+// filename: internal/common/logging/logger.go
 package logging
 
 import (
@@ -28,14 +28,14 @@ type Config struct {
 // NewLogger создает новый логгер // v1.0
 func NewLogger(config Config) (*Logger, error) {
 	logger := logrus.New()
-	
+
 	// Устанавливаем уровень логирования
 	level, err := logrus.ParseLevel(config.Level)
 	if err != nil {
 		return nil, err
 	}
 	logger.SetLevel(level)
-	
+
 	// Устанавливаем формат
 	switch config.Format {
 	case "json":
@@ -47,12 +47,12 @@ func NewLogger(config Config) (*Logger, error) {
 	default:
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	}
-	
+
 	// Устанавливаем вывод
 	if err := setOutput(logger, config); err != nil {
 		return nil, err
 	}
-	
+
 	return &Logger{Logger: logger}, nil
 }
 
@@ -70,7 +70,7 @@ func setOutput(logger *logrus.Logger, config Config) error {
 	default:
 		logger.SetOutput(os.Stdout)
 	}
-	
+
 	return nil
 }
 
@@ -81,16 +81,16 @@ func setFileOutput(logger *logrus.Logger, config Config) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	
+
 	// Открываем файл
 	file, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return err
 	}
-	
+
 	// Устанавливаем вывод
 	logger.SetOutput(io.MultiWriter(os.Stdout, file))
-	
+
 	return nil
 }
 
@@ -112,8 +112,8 @@ func (l *Logger) WithError(err error) *logrus.Entry {
 // WithRequest добавляет информацию о запросе к логгеру // v1.0
 func (l *Logger) WithRequest(method, path, remoteAddr string) *logrus.Entry {
 	return l.Logger.WithFields(logrus.Fields{
-		"method":     method,
-		"path":       path,
+		"method":      method,
+		"path":        path,
 		"remote_addr": remoteAddr,
 	})
 }
@@ -160,7 +160,7 @@ func (l *Logger) WithDuration(duration float64) *logrus.Entry {
 // WithMetrics добавляет метрики к логгеру // v1.0
 func (l *Logger) WithMetrics(eventsProcessed, alertsGenerated int) *logrus.Entry {
 	return l.Logger.WithFields(logrus.Fields{
-		"events_processed":  eventsProcessed,
+		"events_processed": eventsProcessed,
 		"alerts_generated": alertsGenerated,
 	})
 }

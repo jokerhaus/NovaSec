@@ -1,4 +1,4 @@
-// internal/models/suppression.go
+// filename: internal/models/suppression.go
 package models
 
 import (

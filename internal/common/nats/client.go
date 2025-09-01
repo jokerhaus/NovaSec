@@ -1,4 +1,4 @@
-// internal/common/nats/client.go
+// filename: internal/common/nats/client.go
 package nats
 
 import (

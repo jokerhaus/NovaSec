@@ -56,3 +56,6 @@ configs/tls/*.pem
 
 # Build
 build/
+
+# Cursor Project Rules
+.cursor/

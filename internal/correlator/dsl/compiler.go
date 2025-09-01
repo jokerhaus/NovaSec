@@ -1,0 +1,572 @@
+// filename: internal/correlator/dsl/compiler.go
+package dsl
+
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/novasec/novasec/internal/models"
+)
+
+// Compiler компилирует YAML правила в исполняемые структуры // v1.0
+type Compiler struct {
+	// Кэш скомпилированных правил
+	compiledRules map[string]*CompiledRule
+}
+
+// NewCompiler создает новый компилятор DSL // v1.0
+func NewCompiler() *Compiler {
+	return &Compiler{
+		compiledRules: make(map[string]*CompiledRule),
+	}
+}
+
+// ValidateRule валидирует правило перед компиляцией // v1.0
+func ValidateRule(rule *Rule) error {
+	if rule.ID == "" {
+		return fmt.Errorf("rule ID is required")
+	}
+	if rule.Name == "" {
+		return fmt.Errorf("rule name is required")
+	}
+	if rule.Severity == "" {
+		return fmt.Errorf("rule severity is required")
+	}
+	if len(rule.Conditions) == 0 {
+		return fmt.Errorf("rule must have at least one condition")
+	}
+	if rule.Window.Duration == 0 {
+		return fmt.Errorf("window duration is required")
+	}
+	if rule.Threshold.Count == 0 {
+		return fmt.Errorf("threshold count is required")
+	}
+	if len(rule.Actions) == 0 {
+		return fmt.Errorf("rule must have at least one action")
+	}
+	return nil
+}
+
+// CompileRule компилирует правило в исполняемую структуру // v1.0
+func (c *Compiler) CompileRule(rule *Rule) (*CompiledRule, error) {
+	// Валидируем правило
+	if err := ValidateRule(rule); err != nil {
+		return nil, fmt.Errorf("rule validation failed: %w", err)
+	}
+
+	// Создаем матчер событий
+	matcher, err := c.createEventMatcher(rule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create event matcher: %w", err)
+	}
+
+	// Создаем оценщик временных окон
+	evaluator, err := c.createWindowEvaluator(rule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create window evaluator: %w", err)
+	}
+
+	// Создаем исполнители действий
+	actions, err := c.createActionExecutors(rule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create action executors: %w", err)
+	}
+
+	compiledRule := &CompiledRule{
+		Rule:      rule,
+		Matcher:   matcher,
+		Evaluator: evaluator,
+		Actions:   actions,
+	}
+
+	// Кэшируем скомпилированное правило
+	c.compiledRules[rule.ID] = compiledRule
+
+	return compiledRule, nil
+}
+
+// createEventMatcher создает матчер событий для правила // v1.0
+func (c *Compiler) createEventMatcher(rule *Rule) (EventMatcher, error) {
+	matcher := &CompositeEventMatcher{
+		conditions: rule.Conditions,
+		priority:   c.calculatePriority(rule),
+	}
+
+	return matcher, nil
+}
+
+// createWindowEvaluator создает оценщик временных окон // v1.0
+func (c *Compiler) createWindowEvaluator(rule *Rule) (WindowEvaluator, error) {
+	evaluator := &SlidingWindowEvaluator{
+		ruleID:     rule.ID,
+		windowSize: rule.Window.Duration,
+		threshold:  rule.Threshold,
+		groupBy:    rule.GroupBy,
+		sliding:    rule.Window.Sliding,
+	}
+
+	return evaluator, nil
+}
+
+// createActionExecutors создает исполнители действий // v1.0
+func (c *Compiler) createActionExecutors(rule *Rule) ([]ActionExecutor, error) {
+	var executors []ActionExecutor
+
+	for _, action := range rule.Actions {
+		executor, err := c.createActionExecutor(action)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create action executor for %s: %w", action.Type, err)
+		}
+		executors = append(executors, executor)
+	}
+
+	return executors, nil
+}
+
+// createActionExecutor создает исполнитель для конкретного действия // v1.0
+func (c *Compiler) createActionExecutor(action Action) (ActionExecutor, error) {
+	switch action.Type {
+	case "create_alert":
+		return &CreateAlertAction{
+			actionType: action.Type,
+			config:     action.Config,
+		}, nil
+	case "send_email":
+		return &SendEmailAction{
+			actionType: action.Type,
+			config:     action.Config,
+			delay:      action.Delay,
+			retry:      action.Retry,
+			timeout:    action.Timeout,
+		}, nil
+	case "send_telegram":
+		return &SendTelegramAction{
+			actionType: action.Type,
+			config:     action.Config,
+			delay:      action.Delay,
+			retry:      action.Retry,
+			timeout:    action.Timeout,
+		}, nil
+	case "webhook":
+		return &WebhookAction{
+			actionType: action.Type,
+			config:     action.Config,
+			delay:      action.Delay,
+			retry:      action.Retry,
+			timeout:    action.Timeout,
+		}, nil
+	case "log":
+		return &LogAction{
+			actionType: action.Type,
+			config:     action.Config,
+		}, nil
+	case "script":
+		return &ScriptAction{
+			actionType: action.Type,
+			config:     action.Config,
+			timeout:    action.Timeout,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported action type: %s", action.Type)
+	}
+}
+
+// calculatePriority вычисляет приоритет правила // v1.0
+func (c *Compiler) calculatePriority(rule *Rule) int {
+	priority := 0
+
+	// Базовый приоритет по важности
+	switch rule.Severity {
+	case "critical":
+		priority += 100
+	case "high":
+		priority += 80
+	case "medium":
+		priority += 60
+	case "low":
+		priority += 40
+	}
+
+	// Дополнительный приоритет по сложности условий
+	priority += len(rule.Conditions) * 5
+
+	// Приоритет по типу порога
+	if rule.Threshold.Type == "unique" {
+		priority += 10
+	}
+
+	// Приоритет по размеру окна (меньше окно = выше приоритет)
+	if rule.Window.Duration < time.Minute {
+		priority += 20
+	} else if rule.Window.Duration < time.Hour {
+		priority += 10
+	}
+
+	return priority
+}
+
+// GetCompiledRule возвращает скомпилированное правило из кэша // v1.0
+func (c *Compiler) GetCompiledRule(ruleID string) (*CompiledRule, bool) {
+	rule, exists := c.compiledRules[ruleID]
+	return rule, exists
+}
+
+// ClearCache очищает кэш скомпилированных правил // v1.0
+func (c *Compiler) ClearCache() {
+	c.compiledRules = make(map[string]*CompiledRule)
+}
+
+// GetCacheStats возвращает статистику кэша // v1.0
+func (c *Compiler) GetCacheStats() map[string]interface{} {
+	return map[string]interface{}{
+		"total_rules": len(c.compiledRules),
+		"cache_size":  len(c.compiledRules),
+	}
+}
+
+// CompositeEventMatcher составной матчер событий // v1.0
+type CompositeEventMatcher struct {
+	conditions []Condition
+	priority   int
+}
+
+// Match проверяет, соответствует ли событие условиям правила // v1.0
+func (m *CompositeEventMatcher) Match(event *models.Event) bool {
+	for _, condition := range m.conditions {
+		if !m.evaluateCondition(event, condition) {
+			return false
+		}
+	}
+	return true
+}
+
+// GetPriority возвращает приоритет матчера // v1.0
+func (m *CompositeEventMatcher) GetPriority() int {
+	return m.priority
+}
+
+// evaluateCondition оценивает одно условие // v1.0
+func (m *CompositeEventMatcher) evaluateCondition(event *models.Event, condition Condition) bool {
+	value := m.extractFieldValue(event, condition.Field)
+	result := m.compareValues(value, condition.Operator, condition.Value)
+
+	if condition.Invert {
+		return !result
+	}
+	return result
+}
+
+// extractFieldValue извлекает значение поля из события // v1.0
+func (m *CompositeEventMatcher) extractFieldValue(event *models.Event, field string) string {
+	switch field {
+	case "host":
+		return event.Host
+	case "agent_id":
+		return event.AgentID
+	case "env":
+		return event.Env
+	case "source":
+		return event.Source
+	case "severity":
+		return event.Severity
+	case "category":
+		return event.Category
+	case "subtype":
+		return event.Subtype
+	case "message":
+		return event.Message
+	case "user.name":
+		if event.User != nil {
+			return event.User.Name
+		}
+		return ""
+	case "network.src_ip":
+		if event.Network != nil && event.Network.SrcIP != "" {
+			return event.Network.SrcIP
+		}
+		return ""
+	case "network.src_port":
+		if event.Network != nil && event.Network.SrcPort != nil {
+			return strconv.Itoa(*event.Network.SrcPort)
+		}
+		return ""
+	case "network.proto":
+		if event.Network != nil {
+			return event.Network.Proto
+		}
+		return ""
+	case "file.path":
+		if event.File != nil {
+			return event.File.Path
+		}
+		return ""
+	case "process.name":
+		if event.Process != nil {
+			return event.Process.Name
+		}
+		return ""
+	case "process.pid":
+		if event.Process != nil && event.Process.PID != nil {
+			return strconv.Itoa(*event.Process.PID)
+		}
+		return ""
+	default:
+		// Проверяем метки
+		if event.Labels != nil {
+			if value, exists := event.Labels[field]; exists {
+				return value
+			}
+		}
+		return ""
+	}
+}
+
+// compareValues сравнивает значения согласно оператору // v1.0
+func (m *CompositeEventMatcher) compareValues(actual, operator, expected string) bool {
+	switch operator {
+	case "eq":
+		return actual == expected
+	case "ne":
+		return actual != expected
+	case "contains":
+		return strings.Contains(actual, expected)
+	case "startswith":
+		return strings.HasPrefix(actual, expected)
+	case "endswith":
+		return strings.HasSuffix(actual, expected)
+	case "regex":
+		if matched, err := regexp.MatchString(expected, actual); err == nil {
+			return matched
+		}
+		return false
+	case "in":
+		values := strings.Split(expected, ",")
+		for _, value := range values {
+			if strings.TrimSpace(value) == actual {
+				return true
+			}
+		}
+		return false
+	case "nin":
+		values := strings.Split(expected, ",")
+		for _, value := range values {
+			if strings.TrimSpace(value) == actual {
+				return false
+			}
+		}
+		return true
+	case "gt", "gte", "lt", "lte":
+		return m.compareNumeric(actual, operator, expected)
+	default:
+		return false
+	}
+}
+
+// compareNumeric сравнивает числовые значения // v1.0
+func (m *CompositeEventMatcher) compareNumeric(actual, operator, expected string) bool {
+	actualNum, err1 := strconv.ParseFloat(actual, 64)
+	expectedNum, err2 := strconv.ParseFloat(expected, 64)
+
+	if err1 != nil || err2 != nil {
+		return false
+	}
+
+	switch operator {
+	case "gt":
+		return actualNum > expectedNum
+	case "gte":
+		return actualNum >= expectedNum
+	case "lt":
+		return actualNum < expectedNum
+	case "lte":
+		return actualNum <= expectedNum
+	default:
+		return false
+	}
+}
+
+// SlidingWindowEvaluator оценщик скользящих временных окон // v1.0
+type SlidingWindowEvaluator struct {
+	ruleID     string
+	windowSize time.Duration
+	threshold  ThresholdConfig
+	groupBy    []string
+	sliding    bool
+	events     map[string][]*models.Event // группировка по ключу
+}
+
+// AddEvent добавляет событие в окно // v1.0
+func (e *SlidingWindowEvaluator) AddEvent(event *models.Event) bool {
+	key := e.generateGroupKey(event)
+
+	// Очищаем старые события
+	e.cleanupOldEvents(key)
+
+	// Добавляем новое событие
+	e.events[key] = append(e.events[key], event)
+	return true
+}
+
+// IsTriggered проверяет, сработало ли правило // v1.0
+func (e *SlidingWindowEvaluator) IsTriggered() bool {
+	for key, events := range e.events {
+		if e.checkThreshold(key, events) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetTriggeredGroups возвращает группы, которые сработали // v1.0
+func (e *SlidingWindowEvaluator) GetTriggeredGroups() []string {
+	var triggered []string
+
+	for key, events := range e.events {
+		if e.checkThreshold(key, events) {
+			triggered = append(triggered, key)
+		}
+	}
+
+	return triggered
+}
+
+// GetEventsForGroup возвращает события для конкретной группы // v1.0
+func (e *SlidingWindowEvaluator) GetEventsForGroup(groupKey string) []*models.Event {
+	return e.events[groupKey]
+}
+
+// Reset сбрасывает состояние оценщика // v1.0
+func (e *SlidingWindowEvaluator) Reset() {
+	e.events = make(map[string][]*models.Event)
+}
+
+// generateGroupKey генерирует ключ группировки // v1.0
+func (e *SlidingWindowEvaluator) generateGroupKey(event *models.Event) string {
+	if len(e.groupBy) == 0 {
+		return "default"
+	}
+
+	var parts []string
+	for _, field := range e.groupBy {
+		value := e.extractFieldValue(event, field)
+		parts = append(parts, fmt.Sprintf("%s=%s", field, value))
+	}
+
+	return strings.Join(parts, "|")
+}
+
+// extractFieldValue извлекает значение поля для группировки // v1.0
+func (e *SlidingWindowEvaluator) extractFieldValue(event *models.Event, field string) string {
+	switch field {
+	case "host":
+		return event.Host
+	case "agent_id":
+		return event.AgentID
+	case "env":
+		return event.Env
+	case "source":
+		return event.Source
+	case "user_name":
+		return event.UserName
+	case "user_uid":
+		if event.UserUID != nil {
+			return strconv.Itoa(*event.UserUID)
+		}
+		return ""
+	case "src_ip":
+		return event.SrcIP
+	case "src_port":
+		if event.SrcPort != nil {
+			return strconv.Itoa(*event.SrcPort)
+		}
+		return ""
+	case "dst_ip":
+		return event.DstIP
+	case "dst_port":
+		if event.DstPort != nil {
+			return strconv.Itoa(*event.DstPort)
+		}
+		return ""
+	case "proto":
+		return event.Proto
+	case "file_path":
+		return event.FilePath
+	case "process_name":
+		return event.ProcessName
+	case "process_pid":
+		if event.ProcessPID != nil {
+			return strconv.Itoa(*event.ProcessPID)
+		}
+		return ""
+	case "sha256":
+		return event.SHA256
+	case "geo":
+		return event.Geo
+	case "asn":
+		if event.ASN != nil {
+			return strconv.Itoa(*event.ASN)
+		}
+		return ""
+	case "ioc":
+		return event.IOC
+	case "category":
+		return event.Category
+	case "subtype":
+		return event.Subtype
+	case "severity":
+		return event.Severity
+	case "message":
+		return event.Message
+	default:
+		if event.Labels != nil {
+			if value, exists := event.Labels[field]; exists {
+				return value
+			}
+		}
+		return ""
+	}
+}
+
+// cleanupOldEvents удаляет события, выходящие за пределы окна // v1.0
+func (e *SlidingWindowEvaluator) cleanupOldEvents(groupKey string) {
+	events := e.events[groupKey]
+	cutoff := time.Now().Add(-e.windowSize)
+
+	var validEvents []*models.Event
+	for _, event := range events {
+		if event.TS.After(cutoff) {
+			validEvents = append(validEvents, event)
+		}
+	}
+
+	e.events[groupKey] = validEvents
+}
+
+// checkThreshold проверяет, достигнут ли порог // v1.0
+func (e *SlidingWindowEvaluator) checkThreshold(groupKey string, events []*models.Event) bool {
+	if len(events) < e.threshold.Count {
+		return false
+	}
+
+	if e.threshold.Type == "unique" {
+		uniqueCount := e.countUniqueEvents(events)
+		return uniqueCount >= e.threshold.Count
+	}
+
+	return len(events) >= e.threshold.Count
+}
+
+// countUniqueEvents подсчитывает уникальные события // v1.0
+func (e *SlidingWindowEvaluator) countUniqueEvents(events []*models.Event) int {
+	seen := make(map[string]bool)
+
+	for _, event := range events {
+		key := fmt.Sprintf("%s:%s:%s", event.Host, event.Source, event.Message)
+		seen[key] = true
+	}
+
+	return len(seen)
+}

@@ -1,184 +1,76 @@
 # internal/rules/fim_critical.yml
-# Правило для обнаружения изменений критических файлов (FIM)
+# Правило для обнаружения критических изменений файлов (FIM)
 
 id: "fim_critical"
 name: "Critical File Integrity Monitoring"
-description: "Обнаруживает изменения в критически важных системных файлах"
+description: "Обнаруживает изменения критически важных системных файлов"
 severity: "critical"
-window: "1m"
-group_by: ["host", "file.path", "hashes.sha256"]
-threshold: 1
-suppress: "2m"
-actions: ["alert", "notify", "block"]
+enabled: true
+
+window:
+  duration: "1m"
+  sliding: false
+
+group_by: ["host", "file_path", "sha256"]
+
+threshold:
+  count: 1
+  type: "count"
+  field: ""
+
+suppress:
+  duration: "2m"
+  key: "rule_id + host + file_path + sha256"
 
 conditions:
   - field: "category"
     operator: "equals"
     value: "file"
+    invert: false
   
   - field: "subtype"
-    operator: "in"
-    value: ["create", "modify", "delete"]
+    operator: "equals"
+    value: "modify"
+    invert: false
   
-  - field: "file.path"
-    operator: "matches"
-    value: "^(/etc/shadow|/etc/sudoers|/etc/passwd|/etc/group|/boot/grub/grub.cfg|/etc/ssh/sshd_config)$"
+  - field: "file_path"
+    operator: "in"
+    value: "/etc/shadow,/etc/sudoers,/etc/passwd,/etc/group"
+    invert: false
 
-# Дополнительные параметры
+actions:
+  - type: "alert"
+    config:
+      title: "Critical File Modification Detected"
+      description: "Critical system file has been modified"
+      severity: "critical"
+    delay: "0s"
+    retry: 3
+    timeout: "30s"
+  
+  - type: "notify"
+    config:
+      channels: ["email", "telegram", "webhook"]
+      template: "fim_critical"
+      immediate: true
+    delay: "0s"
+    retry: 2
+    timeout: "10s"
+  
+  - type: "block"
+    config:
+      action: "isolate_host"
+      duration: "1h"
+    delay: "0s"
+    retry: 1
+    timeout: "5s"
+
 metadata:
-  tags: ["fim", "file-integrity", "critical-files", "system-security"]
+  tags: ["fim", "file_integrity", "critical", "system"]
   references:
     - "https://attack.mitre.org/techniques/T1005/"
     - "https://attack.mitre.org/techniques/T1005/001/"
-    - "https://attack.mitre.org/techniques/T1005/002/"
-  
-  # Настройки уведомлений
-  notifications:
-    email:
-      - "security@company.com"
-      - "admin@company.com"
-      - "incident-response@company.com"
-    telegram:
-      channel: "security-alerts"
-      priority: "high"
-    webhook:
-      url: "https://webhook.company.com/security"
-      headers:
-        Authorization: "Bearer ${WEBHOOK_TOKEN}"
-      timeout: "10s"
-
-# Логика подавления
-suppression:
-  enabled: true
-  window: "2m"
-  key_fields: ["host", "file.path", "hashes.sha256"]
-  max_alerts: 1
-  reason: "Предотвращение спама при множественных изменениях"
-
-# Эскалация
-escalation:
-  enabled: true
-  levels:
-    - threshold: 1
-      action: "immediate_response"
-      notify: ["security-manager@company.com", "oncall@company.com"]
-      response_time: "5m"
-    - threshold: 3
-      action: "emergency_response"
-      notify: ["emergency@company.com", "ciso@company.com"]
-      response_time: "1m"
-
-# Действия при срабатывании
-actions:
-  - type: "alert"
-    description: "Создать критический алерт"
-    priority: "immediate"
-  
-  - type: "notify"
-    description: "Отправить уведомления всем заинтересованным"
-    channels: ["email", "telegram", "webhook"]
-  
-  - type: "log"
-    description: "Записать в лог безопасности и аудита"
-    level: "critical"
-  
-  - type: "block"
-    description: "Блокировать пользователя/процесс (если настроено)"
-    scope: "user_process"
-  
-  - type: "isolate"
-    description: "Изолировать затронутый хост (если настроено)"
-    method: "network_isolation"
-
-# Дополнительные проверки
-additional_checks:
-  - type: "file_owner"
-    description: "Проверить владельца измененного файла"
-    expected: "root"
-  
-  - type: "file_permissions"
-    description: "Проверить права доступа к файлу"
-    expected: "600"  # для /etc/shadow
-  
-  - type: "process_audit"
-    description: "Аудит процесса, который изменил файл"
-    fields: ["process.pid", "process.name", "user.name"]
-
-# Тестовые данные
-test_data:
-  positive_cases:
-    - description: "Изменение /etc/shadow"
-      events:
-        - ts: "2024-01-15T10:00:00Z"
-          host: "server-01"
-          category: "file"
-          subtype: "modify"
-          severity: "critical"
-          message: "File /etc/shadow modified"
-          file:
-            path: "/etc/shadow"
-          hashes:
-            sha256: "a1b2c3d4e5f6..."
-          user:
-            name: "root"
-            uid: 0
-          process:
-            pid: 1234
-            name: "passwd"
-    
-    - description: "Изменение /etc/sudoers"
-      events:
-        - ts: "2024-01-15T10:01:00Z"
-          host: "server-01"
-          category: "file"
-          subtype: "modify"
-          severity: "critical"
-          message: "File /etc/sudoers modified"
-          file:
-            path: "/etc/sudoers"
-          hashes:
-            sha256: "b2c3d4e5f6a1..."
-          user:
-            name: "admin"
-            uid: 1000
-          process:
-            pid: 5678
-            name: "visudo"
-  
-  negative_cases:
-    - description: "Изменение обычного файла"
-      events:
-        - ts: "2024-01-15T10:00:00Z"
-          host: "server-01"
-          category: "file"
-          subtype: "modify"
-          severity: "info"
-          message: "File /var/log/messages modified"
-          file:
-            path: "/var/log/messages"
-    
-    - description: "Чтение критического файла"
-      events:
-        - ts: "2024-01-15T10:00:00Z"
-          host: "server-01"
-          category: "file"
-          subtype: "read"
-          severity: "low"
-          message: "File /etc/shadow accessed"
-          file:
-            path: "/etc/shadow"
-
-# Настройки мониторинга
-monitoring:
-  enabled: true
-  metrics:
-    - "file_changes_total"
-    - "critical_file_changes"
-    - "response_time"
-  
-  alerts:
-    - metric: "critical_file_changes"
-      threshold: 5
-      window: "1h"
-      severity: "warning"
-      message: "Высокое количество изменений критических файлов"
+  priority: 1
+  category: "file_integrity"
+  mitre_technique: "T1005.001"
+  response_time: "immediate"

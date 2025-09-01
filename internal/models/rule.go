@@ -1,4 +1,4 @@
-// internal/models/rule.go
+// filename: internal/models/rule.go
 package models
 
 import (
@@ -9,28 +9,28 @@ import (
 
 // Rule представляет правило корреляции
 type Rule struct {
-	ID          string                 `json:"id" db:"id"`
-	Name        string                 `json:"name" db:"name"`
-	Version     int                    `json:"version" db:"version"`
-	YAML        string                 `json:"yaml" db:"yaml"`
-	Enabled     bool                   `json:"enabled" db:"enabled"`
-	CreatedAt   time.Time              `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at" db:"updated_at"`
-	Compiled    *CompiledRule          `json:"compiled,omitempty"`
+	ID        string        `json:"id" db:"id"`
+	Name      string        `json:"name" db:"name"`
+	Version   int           `json:"version" db:"version"`
+	YAML      string        `json:"yaml" db:"yaml"`
+	Enabled   bool          `json:"enabled" db:"enabled"`
+	CreatedAt time.Time     `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at" db:"updated_at"`
+	Compiled  *CompiledRule `json:"compiled,omitempty"`
 }
 
 // CompiledRule представляет скомпилированное правило
 type CompiledRule struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Severity    string                 `json:"severity"`
-	Window      time.Duration          `json:"window"`
-	GroupBy     []string               `json:"group_by"`
-	Threshold   int                    `json:"threshold"`
-	Suppress    time.Duration          `json:"suppress"`
-	Actions     []string               `json:"actions"`
-	Conditions  []CompiledCondition   `json:"conditions"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Severity    string              `json:"severity"`
+	Window      time.Duration       `json:"window"`
+	GroupBy     []string            `json:"group_by"`
+	Threshold   int                 `json:"threshold"`
+	Suppress    time.Duration       `json:"suppress"`
+	Actions     []string            `json:"actions"`
+	Conditions  []CompiledCondition `json:"conditions"`
 }
 
 // CompiledCondition представляет скомпилированное условие
@@ -44,10 +44,10 @@ type CompiledCondition struct {
 type RuleAction string
 
 const (
-	ActionAlert     RuleAction = "alert"
-	ActionBlock     RuleAction = "block"
-	ActionLog       RuleAction = "log"
-	ActionNotify    RuleAction = "notify"
+	ActionAlert  RuleAction = "alert"
+	ActionBlock  RuleAction = "block"
+	ActionLog    RuleAction = "log"
+	ActionNotify RuleAction = "notify"
 )
 
 // NewRule создает новое правило // v1.0

@@ -1,4 +1,4 @@
-// internal/common/pg/client.go
+// filename: internal/common/pg/client.go
 package pg
 
 import (
@@ -18,14 +18,14 @@ type Client struct {
 
 // Config представляет конфигурацию PostgreSQL
 type Config struct {
-	Host         string        `yaml:"host"`
-	Port         int           `yaml:"port"`
-	Database     string        `yaml:"database"`
-	Username     string        `yaml:"username"`
-	Password     string        `yaml:"password"`
-	SSLMode      string        `yaml:"ssl_mode"`
-	MaxOpenConns int           `yaml:"max_open_conns"`
-	MaxIdleConns int           `yaml:"max_idle_conns"`
+	Host            string        `yaml:"host"`
+	Port            int           `yaml:"port"`
+	Database        string        `yaml:"database"`
+	Username        string        `yaml:"username"`
+	Password        string        `yaml:"password"`
+	SSLMode         string        `yaml:"ssl_mode"`
+	MaxOpenConns    int           `yaml:"max_open_conns"`
+	MaxIdleConns    int           `yaml:"max_idle_conns"`
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
 }
 
@@ -49,7 +49,7 @@ func NewClient(config Config) (*Client, error) {
 	// Проверяем соединение
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
@@ -109,10 +109,10 @@ func (c *Client) IsConnected() bool {
 	if c.db == nil {
 		return false
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	return c.Ping(ctx) == nil
 }
 
@@ -124,19 +124,19 @@ func (c *Client) GetStats() map[string]interface{} {
 
 	stats := c.db.Stats()
 	return map[string]interface{}{
-		"connected":        c.IsConnected(),
-		"database":         c.config.Database,
-		"host":            c.config.Host,
-		"port":            c.config.Port,
-		"ssl_mode":        c.config.SSLMode,
-		"max_open_conns":  c.config.MaxOpenConns,
-		"max_idle_conns":  c.config.MaxIdleConns,
-		"open_connections": stats.OpenConnections,
-		"in_use":          stats.InUse,
-		"idle":            stats.Idle,
-		"wait_count":      stats.WaitCount,
-		"wait_duration":   stats.WaitDuration,
-		"max_idle_closed": stats.MaxIdleClosed,
+		"connected":           c.IsConnected(),
+		"database":            c.config.Database,
+		"host":                c.config.Host,
+		"port":                c.config.Port,
+		"ssl_mode":            c.config.SSLMode,
+		"max_open_conns":      c.config.MaxOpenConns,
+		"max_idle_conns":      c.config.MaxIdleConns,
+		"open_connections":    stats.OpenConnections,
+		"in_use":              stats.InUse,
+		"idle":                stats.Idle,
+		"wait_count":          stats.WaitCount,
+		"wait_duration":       stats.WaitDuration,
+		"max_idle_closed":     stats.MaxIdleClosed,
 		"max_lifetime_closed": stats.MaxLifetimeClosed,
 	}
 }
@@ -144,11 +144,11 @@ func (c *Client) GetStats() map[string]interface{} {
 // GetConnectionInfo возвращает информацию о соединении // v1.0
 func (c *Client) GetConnectionInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"connected":    c.IsConnected(),
-		"database":     c.config.Database,
-		"host":        c.config.Host,
-		"port":        c.config.Port,
-		"username":    c.config.Username,
-		"ssl_mode":    c.config.SSLMode,
+		"connected": c.IsConnected(),
+		"database":  c.config.Database,
+		"host":      c.config.Host,
+		"port":      c.config.Port,
+		"username":  c.config.Username,
+		"ssl_mode":  c.config.SSLMode,
 	}
 }

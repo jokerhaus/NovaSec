@@ -1,4 +1,4 @@
-// cmd/normalizer/main.go
+// filename: cmd/normalizer/main.go
 // NovaSec Normalizer Service - Entry Point
 
 package main

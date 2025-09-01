@@ -1,4 +1,4 @@
-// cmd/correlator/main.go
+// filename: cmd/correlator/main.go
 // NovaSec Correlator Service - Entry Point
 
 package main

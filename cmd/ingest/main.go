@@ -1,4 +1,4 @@
-// cmd/ingest/main.go
+// filename: cmd/ingest/main.go
 package main
 
 import (

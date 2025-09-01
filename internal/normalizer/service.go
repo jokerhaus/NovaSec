@@ -1,4 +1,4 @@
-// internal/normalizer/service.go
+// filename: internal/normalizer/service.go
 // NovaSec Normalizer Service
 
 package normalizer
@@ -12,14 +12,15 @@ import (
 	"github.com/novasec/novasec/internal/common/logging"
 	"github.com/novasec/novasec/internal/common/nats"
 	"github.com/novasec/novasec/internal/models"
+	"github.com/novasec/novasec/internal/normalizer/parsers"
 )
 
 // Service represents the normalizer service
 type Service struct {
-	config *config.Config
-	logger *logging.Logger
-	nats   *nats.Client
-	// v1.0
+	config   *config.Config
+	logger   *logging.Logger
+	nats     *nats.Client
+	parsers  *parsers.ParserRegistry
 	stopChan chan struct{}
 }
 
@@ -29,6 +30,7 @@ func NewService(cfg *config.Config, logger *logging.Logger, natsClient *nats.Cli
 		config:   cfg,
 		logger:   logger,
 		nats:     natsClient,
+		parsers:  parsers.NewParserRegistry(),
 		stopChan: make(chan struct{}),
 	}
 }
@@ -87,14 +89,13 @@ func (s *Service) normalizeEvent(event *models.Event) *models.Event {
 	// Create a copy of the event for normalization
 	normalized := *event
 
-	// Apply category-specific normalization
-	switch event.Category {
-	case "linux_auth":
-		s.normalizeLinuxAuth(&normalized)
-	case "nginx_access":
-		s.normalizeNginxAccess(&normalized)
-	case "windows_eventlog":
-		s.normalizeWindowsEventLog(&normalized)
+	// Try to find a suitable parser for the event source
+	if parser := s.parsers.GetParserForSource(event.Source); parser != nil {
+		if parsedEvent, err := parser.ParseEvent(&normalized); err == nil && parsedEvent != nil {
+			normalized = *parsedEvent
+		} else {
+			s.logger.WithField("source", event.Source).WithField("error", err).Debug("Parser failed, using original event")
+		}
 	}
 
 	// Add common labels
@@ -105,28 +106,4 @@ func (s *Service) normalizeEvent(event *models.Event) *models.Event {
 	normalized.Labels["normalizer_version"] = "1.0"
 
 	return &normalized
-}
-
-// normalizeLinuxAuth normalizes Linux authentication events
-func (s *Service) normalizeLinuxAuth(event *models.Event) {
-	// Add Linux-specific normalization logic here
-	if event.Subtype == "ssh" {
-		event.Labels["auth_method"] = "ssh"
-	}
-}
-
-// normalizeNginxAccess normalizes Nginx access log events
-func (s *Service) normalizeNginxAccess(event *models.Event) {
-	// Add Nginx-specific normalization logic here
-	if event.Subtype == "access" {
-		event.Labels["web_server"] = "nginx"
-	}
-}
-
-// normalizeWindowsEventLog normalizes Windows Event Log events
-func (s *Service) normalizeWindowsEventLog(event *models.Event) {
-	// Add Windows-specific normalization logic here
-	if event.Subtype == "security" {
-		event.Labels["os"] = "windows"
-	}
 }

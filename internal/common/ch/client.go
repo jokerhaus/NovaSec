@@ -1,9 +1,8 @@
-// internal/common/ch/client.go
+// filename: internal/common/ch/client.go
 package ch
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -19,16 +18,16 @@ type Client struct {
 
 // Config представляет конфигурацию ClickHouse
 type Config struct {
-	Hosts     []string      `yaml:"hosts"`
-	Database  string        `yaml:"database"`
-	Username  string        `yaml:"username"`
-	Password  string        `yaml:"password"`
-	Port      int           `yaml:"port"`
-	Secure    bool          `yaml:"secure"`
-	Compress  bool          `yaml:"compress"`
-	MaxOpen   int           `yaml:"max_open"`
-	MaxIdle   int           `yaml:"max_idle"`
-	Timeout   time.Duration `yaml:"timeout"`
+	Hosts    []string      `yaml:"hosts"`
+	Database string        `yaml:"database"`
+	Username string        `yaml:"username"`
+	Password string        `yaml:"password"`
+	Port     int           `yaml:"port"`
+	Secure   bool          `yaml:"secure"`
+	Compress bool          `yaml:"compress"`
+	MaxOpen  int           `yaml:"max_open"`
+	MaxIdle  int           `yaml:"max_idle"`
+	Timeout  time.Duration `yaml:"timeout"`
 }
 
 // NewClient создает новый клиент ClickHouse // v1.0
@@ -250,10 +249,10 @@ func (c *Client) IsConnected() bool {
 	if c.conn == nil {
 		return false
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	return c.Ping(ctx) == nil
 }
 

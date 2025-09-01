@@ -1,4 +1,4 @@
-// internal/models/alert.go
+// filename: internal/models/alert.go
 package models
 
 import (
@@ -11,27 +11,27 @@ import (
 
 // Alert представляет алерт, сгенерированный коррелятором
 type Alert struct {
-	ID         string                 `json:"id" db:"id"`
-	TS         time.Time              `json:"ts" db:"ts"`
-	RuleID     string                 `json:"rule_id" db:"rule_id"`
-	Severity   string                 `json:"severity" db:"severity"`
-	DedupKey   string                 `json:"dedup_key" db:"dedup_key"`
-	Payload    map[string]interface{} `json:"payload" db:"payload"`
-	Status     string                 `json:"status" db:"status"`
-	Env        string                 `json:"env" db:"env"`
-	Host       string                 `json:"host" db:"host"`
-	CreatedAt  time.Time              `json:"created_at" db:"created_at"`
-	UpdatedAt  time.Time              `json:"updated_at" db:"updated_at"`
+	ID        string                 `json:"id" db:"id"`
+	TS        time.Time              `json:"ts" db:"ts"`
+	RuleID    string                 `json:"rule_id" db:"rule_id"`
+	Severity  string                 `json:"severity" db:"severity"`
+	DedupKey  string                 `json:"dedup_key" db:"dedup_key"`
+	Payload   map[string]interface{} `json:"payload" db:"payload"`
+	Status    string                 `json:"status" db:"status"`
+	Env       string                 `json:"env" db:"env"`
+	Host      string                 `json:"host" db:"host"`
+	CreatedAt time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time              `json:"updated_at" db:"updated_at"`
 }
 
 // AlertStatus представляет статус алерта
 type AlertStatus string
 
 const (
-	AlertStatusNew       AlertStatus = "new"
+	AlertStatusNew          AlertStatus = "new"
 	AlertStatusAcknowledged AlertStatus = "acknowledged"
-	AlertStatusResolved  AlertStatus = "resolved"
-	AlertStatusClosed    AlertStatus = "closed"
+	AlertStatusResolved     AlertStatus = "resolved"
+	AlertStatusClosed       AlertStatus = "closed"
 )
 
 // NewAlert создает новый алерт // v1.0

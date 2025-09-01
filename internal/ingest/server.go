@@ -1,10 +1,9 @@
-// internal/ingest/server.go
+// filename: internal/ingest/server.go
 package server
 
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -267,10 +266,10 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 	// Простая реализация rate limiting
 	// В продакшене лучше использовать Redis или другой механизм
 	clients := make(map[string]*rateLimitInfo)
-	
+
 	return func(c *gin.Context) {
 		clientIP := c.ClientIP()
-		
+
 		info, exists := clients[clientIP]
 		if !exists {
 			info = &rateLimitInfo{
@@ -307,7 +306,7 @@ func (s *Server) requestIDMiddleware() gin.HandlerFunc {
 		if requestID == "" {
 			requestID = generateRequestID()
 		}
-		
+
 		c.Header("X-Request-ID", requestID)
 		c.Set("request_id", requestID)
 		c.Next()

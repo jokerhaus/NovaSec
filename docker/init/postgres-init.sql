@@ -1,120 +1,147 @@
--- docker/init/postgres-init.sql
--- SQL скрипт инициализации PostgreSQL для NovaSec
+-- filename: docker/init/postgres-init.sql
+-- Скрипт инициализации PostgreSQL для NovaSec SIEM
+
+-- Создание базы данных (если не существует)
+CREATE DATABASE IF NOT EXISTS novasec;
+USE novasec;
 
 -- Создание расширений
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Создание таблицы агентов
-CREATE TABLE IF NOT EXISTS agents (
-    id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    host VARCHAR(255) NOT NULL,
-    env VARCHAR(100) DEFAULT 'production',
-    status VARCHAR(50) DEFAULT 'active',
-    last_seen TIMESTAMPTZ DEFAULT NOW(),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Создание таблицы интеграций
-CREATE TABLE IF NOT EXISTS integrations (
-    id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    type VARCHAR(100) NOT NULL,
-    config JSONB NOT NULL,
-    enabled BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Создание таблицы алертов
-CREATE TABLE IF NOT EXISTS alerts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ts TIMESTAMPTZ NOT NULL,
-    rule_id VARCHAR(255) NOT NULL,
-    severity VARCHAR(50) NOT NULL,
-    dedup_key VARCHAR(255) NOT NULL,
-    payload JSONB NOT NULL,
-    status VARCHAR(50) DEFAULT 'new',
-    env VARCHAR(100) DEFAULT 'production',
-    host VARCHAR(255),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Создание таблицы правил
-CREATE TABLE IF NOT EXISTS rules (
-    id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    version INTEGER DEFAULT 1,
-    yaml TEXT NOT NULL,
-    enabled BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Создание таблицы подавлений
-CREATE TABLE IF NOT EXISTS suppressions (
-    rule_id VARCHAR(255) NOT NULL,
-    key_hash VARCHAR(255) NOT NULL,
-    until TIMESTAMPTZ NOT NULL,
-    created TIMESTAMPTZ DEFAULT NOW(),
-    reason VARCHAR(500),
-    PRIMARY KEY (rule_id, key_hash)
-);
-
--- Создание индексов для алертов
-CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts);
-CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id);
-CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity);
-CREATE INDEX IF NOT EXISTS idx_alerts_dedup_key ON alerts(dedup_key);
-CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
-CREATE INDEX IF NOT EXISTS idx_alerts_env ON alerts(env);
-CREATE INDEX IF NOT EXISTS idx_alerts_host ON alerts(host);
-
--- Создание индексов для правил
-CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled);
-CREATE INDEX IF NOT EXISTS idx_rules_version ON rules(version);
-
--- Создание индексов для подавлений
-CREATE INDEX IF NOT EXISTS idx_suppressions_until ON suppressions(until);
-CREATE INDEX IF NOT EXISTS idx_suppressions_rule_id ON suppressions(rule_id);
-
--- Вставка тестовых данных
-INSERT INTO agents (id, name, host, env) VALUES 
-    ('agent-001', 'Test Agent 1', 'server-01', 'production'),
-    ('agent-002', 'Test Agent 2', 'server-02', 'production')
-ON CONFLICT (id) DO NOTHING;
-
--- Создание пользователя для приложения (если не существует)
-DO $$
+-- Создание ролей
+DO $$ 
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'novasec_app') THEN
-        CREATE ROLE novasec_app LOGIN PASSWORD 'novasec_app_pass';
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'novasec_admin') THEN
+        CREATE ROLE novasec_admin WITH LOGIN PASSWORD 'admin_password_here';
     END IF;
-END
-$$;
+    
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'novasec_app') THEN
+        CREATE ROLE novasec_app WITH LOGIN PASSWORD 'app_password_here';
+    END IF;
+    
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'novasec_readonly') THEN
+        CREATE ROLE novasec_readonly WITH LOGIN PASSWORD 'readonly_password_here';
+    END IF;
+END $$;
 
--- Предоставление прав пользователю приложения
+-- Предоставление прав
+GRANT ALL PRIVILEGES ON DATABASE novasec TO novasec_admin;
 GRANT CONNECT ON DATABASE novasec TO novasec_app;
-GRANT USAGE ON SCHEMA public TO novasec_app;
+GRANT CONNECT ON DATABASE novasec TO novasec_readonly;
+
+-- Инициализация схемы
+\i /docker-entrypoint-initdb.d/migrations/001_meta.sql
+\i /docker-entrypoint-initdb.d/migrations/002_alerts.sql
+\i /docker-entrypoint-initdb.d/migrations/003_rules.sql
+\i /docker-entrypoint-initdb.d/migrations/004_suppressions.sql
+
+-- Создание дополнительных индексов для производительности
+CREATE INDEX IF NOT EXISTS idx_alerts_ts_env ON alerts(ts, env);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity_status ON alerts(severity, status);
+CREATE INDEX IF NOT EXISTS idx_rules_enabled_priority ON rules(enabled, name);
+
+-- Настройка прав доступа для приложения
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO novasec_app;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO novasec_readonly;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO novasec_app;
 
--- Создание триггера для обновления updated_at
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
+-- Установка параметров конфигурации
+ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';
+ALTER SYSTEM SET log_statement = 'all';
+ALTER SYSTEM SET log_duration = on;
+ALTER SYSTEM SET log_min_duration_statement = 1000;
+
+-- Создание задач обслуживания
+DO $$
 BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
+    -- Планировщик для очистки старых записей
+    PERFORM cron.schedule('cleanup-old-heartbeats', '0 2 * * *', 'SELECT cleanup_old_heartbeats();');
+    PERFORM cron.schedule('cleanup-old-agent-events', '0 3 * * *', 'SELECT cleanup_old_agent_events();');
+    PERFORM cron.schedule('cleanup-expired-suppressions', '*/30 * * * *', 'SELECT cleanup_expired_suppressions();');
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'pg_cron extension not available, skipping scheduled tasks';
+END $$;
+
+-- Создание представлений для мониторинга
+CREATE OR REPLACE VIEW system_health AS
+SELECT
+    'alerts' as table_name,
+    COUNT(*) as total_records,
+    COUNT(CASE WHEN ts > NOW() - INTERVAL '24 hours' THEN 1 END) as recent_records,
+    MAX(ts) as latest_record
+FROM alerts
+UNION ALL
+SELECT
+    'agent_heartbeats' as table_name,
+    COUNT(*) as total_records,
+    COUNT(CASE WHEN ts > NOW() - INTERVAL '1 hour' THEN 1 END) as recent_records,
+    MAX(ts) as latest_record
+FROM agent_heartbeats
+UNION ALL
+SELECT
+    'rules' as table_name,
+    COUNT(*) as total_records,
+    COUNT(CASE WHEN enabled = true THEN 1 END) as recent_records,
+    MAX(updated_at) as latest_record
+FROM rules;
+
+-- Создание функции для проверки состояния системы
+CREATE OR REPLACE FUNCTION check_system_status()
+RETURNS TABLE (
+    component TEXT,
+    status TEXT,
+    details JSONB
+) AS $$
+BEGIN
+    -- Проверка активных агентов
+    RETURN QUERY
+    SELECT 
+        'agents'::TEXT,
+        CASE 
+            WHEN COUNT(*) > 0 THEN 'healthy'::TEXT
+            ELSE 'warning'::TEXT
+        END,
+        jsonb_build_object(
+            'total_agents', COUNT(*),
+            'active_agents', COUNT(CASE WHEN last_seen > NOW() - INTERVAL '5 minutes' THEN 1 END)
+        )
+    FROM agents;
+    
+    -- Проверка правил
+    RETURN QUERY
+    SELECT 
+        'rules'::TEXT,
+        CASE 
+            WHEN COUNT(CASE WHEN enabled = true THEN 1 END) > 0 THEN 'healthy'::TEXT
+            ELSE 'error'::TEXT
+        END,
+        jsonb_build_object(
+            'total_rules', COUNT(*),
+            'enabled_rules', COUNT(CASE WHEN enabled = true THEN 1 END)
+        )
+    FROM rules;
+    
+    -- Проверка алертов
+    RETURN QUERY
+    SELECT 
+        'alerts'::TEXT,
+        'healthy'::TEXT,
+        jsonb_build_object(
+            'total_alerts', COUNT(*),
+            'new_alerts', COUNT(CASE WHEN status = 'new' THEN 1 END),
+            'last_24h', COUNT(CASE WHEN ts > NOW() - INTERVAL '24 hours' THEN 1 END)
+        )
+    FROM alerts;
+    
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
--- Применение триггера к таблицам
-CREATE TRIGGER update_agents_updated_at BEFORE UPDATE ON agents FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_integrations_updated_at BEFORE UPDATE ON integrations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_alerts_updated_at BEFORE UPDATE ON alerts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_rules_updated_at BEFORE UPDATE ON rules FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Финальная конфигурация
+SELECT pg_reload_conf();
 
--- Сообщение об успешной инициализации
-SELECT 'PostgreSQL initialization completed successfully!' as status;
+-- Логирование завершения инициализации
+INSERT INTO agent_events (agent_id, event_type, message, created_at) 
+VALUES ('system', 'initialization', 'PostgreSQL database initialized successfully', NOW())
+ON CONFLICT DO NOTHING;

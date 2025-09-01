@@ -1,4 +1,4 @@
-// internal/common/errors/errors.go
+// filename: internal/common/errors/errors.go
 package errors
 
 import (
@@ -26,20 +26,20 @@ const (
 	ErrorCodeEventRequired    ErrorCode = "EVENT_REQUIRED"
 
 	// Ошибки правил
-	ErrorCodeRuleInvalid     ErrorCode = "RULE_INVALID"
-	ErrorCodeRuleParseFailed ErrorCode = "RULE_PARSE_FAILED"
+	ErrorCodeRuleInvalid       ErrorCode = "RULE_INVALID"
+	ErrorCodeRuleParseFailed   ErrorCode = "RULE_PARSE_FAILED"
 	ErrorCodeRuleCompileFailed ErrorCode = "RULE_COMPILE_FAILED"
 
 	// Ошибки алертов
-	ErrorCodeAlertInvalid     ErrorCode = "ALERT_INVALID"
-	ErrorCodeAlertNotFound    ErrorCode = "ALERT_NOT_FOUND"
+	ErrorCodeAlertInvalid      ErrorCode = "ALERT_INVALID"
+	ErrorCodeAlertNotFound     ErrorCode = "ALERT_NOT_FOUND"
 	ErrorCodeAlertUpdateFailed ErrorCode = "ALERT_UPDATE_FAILED"
 
 	// Ошибки базы данных
-	ErrorCodeDBConnection    ErrorCode = "DB_CONNECTION_ERROR"
-	ErrorCodeDBQuery         ErrorCode = "DB_QUERY_ERROR"
-	ErrorCodeDBTransaction   ErrorCode = "DB_TRANSACTION_ERROR"
-	ErrorCodeDBConstraint    ErrorCode = "DB_CONSTRAINT_ERROR"
+	ErrorCodeDBConnection  ErrorCode = "DB_CONNECTION_ERROR"
+	ErrorCodeDBQuery       ErrorCode = "DB_QUERY_ERROR"
+	ErrorCodeDBTransaction ErrorCode = "DB_TRANSACTION_ERROR"
+	ErrorCodeDBConstraint  ErrorCode = "DB_CONSTRAINT_ERROR"
 
 	// Ошибки NATS
 	ErrorCodeNATSConnection ErrorCode = "NATS_CONNECTION_ERROR"
@@ -59,11 +59,11 @@ const (
 
 // NovaSecError представляет ошибку NovaSec
 type NovaSecError struct {
-	Code       ErrorCode            `json:"code"`
-	Message    string               `json:"message"`
+	Code       ErrorCode              `json:"code"`
+	Message    string                 `json:"message"`
 	Details    map[string]interface{} `json:"details,omitempty"`
-	Internal   error                `json:"-"`
-	StatusCode int                  `json:"status_code"`
+	Internal   error                  `json:"-"`
+	StatusCode int                    `json:"status_code"`
 }
 
 // Error возвращает строковое представление ошибки // v1.0

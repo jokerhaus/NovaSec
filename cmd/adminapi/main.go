@@ -1,4 +1,4 @@
-// cmd/adminapi/main.go
+// filename: cmd/adminapi/main.go
 // NovaSec Admin API Service - Entry Point
 
 package main
@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/novasec/novasec/internal/adminapi"
 	"github.com/novasec/novasec/internal/common/config"
 	"github.com/novasec/novasec/internal/common/logging"
-	"github.com/novasec/novasec/internal/adminapi"
 )
 
 func main() {

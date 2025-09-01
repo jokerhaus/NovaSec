@@ -1,4 +1,4 @@
-// cmd/alerting/main.go
+// filename: cmd/alerting/main.go
 // NovaSec Alerting Service - Entry Point
 
 package main
@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/novasec/novasec/internal/alerting"
 	"github.com/novasec/novasec/internal/common/config"
 	"github.com/novasec/novasec/internal/common/logging"
 	"github.com/novasec/novasec/internal/common/nats"
-	"github.com/novasec/novasec/internal/alerting"
 )
 
 func main() {

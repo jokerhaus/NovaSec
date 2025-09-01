@@ -1,6 +1,6 @@
 #!/bin/bash
-# scripts/gen-certs.sh
-# Скрипт для генерации TLS сертификатов для NovaSec
+# filename: scripts/gen-certs.sh
+# Скрипт генерации TLS сертификатов для NovaSec SIEM
 
 set -e
 
@@ -11,345 +11,475 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Функции для вывода
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+# Конфигурация
+CERTS_DIR="configs/tls"
+CA_NAME="novasec-ca"
+SERVER_NAME="novasec-server"
+CLIENT_NAME="novasec-client"
+KEY_SIZE=4096
+DAYS=3650
+COUNTRY="US"
+STATE="CA"
+CITY="San Francisco"
+ORG="NovaSec"
+OU="Security Operations"
+
+# Функции логирования
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
 }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+error() {
+    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: $1${NC}"
 }
 
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+warn() {
+    echo -e "${YELLOW}[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: $1${NC}"
 }
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+info() {
+    echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO: $1${NC}"
 }
 
-# Проверяем наличие OpenSSL
-check_openssl() {
+# Функция для создания директории
+create_dir() {
+    local dir="$1"
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        log "Created directory: $dir"
+    fi
+}
+
+# Функция для генерации случайного серийного номера
+generate_serial() {
+    openssl rand -hex 16
+}
+
+# Функция очистки существующих сертификатов
+cleanup_certs() {
+    if [ -d "$CERTS_DIR" ]; then
+        warn "Removing existing certificates..."
+        rm -rf "$CERTS_DIR"/*
+    fi
+}
+
+# Функция создания конфигурации OpenSSL для CA
+create_ca_config() {
+    cat > "$CERTS_DIR/ca.conf" << EOF
+[ req ]
+default_bits = $KEY_SIZE
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+prompt = no
+
+[ req_distinguished_name ]
+C = $COUNTRY
+ST = $STATE
+L = $CITY
+O = $ORG
+OU = $OU
+CN = $CA_NAME
+
+[ v3_ca ]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyEncipherment,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
+EOF
+}
+
+# Функция создания конфигурации OpenSSL для сервера
+create_server_config() {
+    cat > "$CERTS_DIR/server.conf" << EOF
+[ req ]
+default_bits = $KEY_SIZE
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[ req_distinguished_name ]
+C = $COUNTRY
+ST = $STATE
+L = $CITY
+O = $ORG
+OU = $OU
+CN = $SERVER_NAME
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation,digitalSignature,keyEncipherment
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+DNS.2 = novasec-ingest
+DNS.3 = novasec-api
+DNS.4 = novasec-admin
+DNS.5 = *.novasec.local
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+}
+
+# Функция создания конфигурации OpenSSL для клиента
+create_client_config() {
+    cat > "$CERTS_DIR/client.conf" << EOF
+[ req ]
+default_bits = $KEY_SIZE
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[ req_distinguished_name ]
+C = $COUNTRY
+ST = $STATE
+L = $CITY
+O = $ORG
+OU = $OU
+CN = $CLIENT_NAME
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation,digitalSignature,keyEncipherment
+extendedKeyUsage = clientAuth
+EOF
+}
+
+# Функция создания расширений для подписи сертификатов
+create_extensions() {
+    cat > "$CERTS_DIR/server_ext.conf" << EOF
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+DNS.2 = novasec-ingest
+DNS.3 = novasec-api
+DNS.4 = novasec-admin
+DNS.5 = *.novasec.local
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+
+    cat > "$CERTS_DIR/client_ext.conf" << EOF
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation,digitalSignature,keyEncipherment
+extendedKeyUsage = clientAuth
+EOF
+}
+
+# Проверка зависимостей
+check_dependencies() {
+    log "Checking dependencies..."
+    
     if ! command -v openssl &> /dev/null; then
-        log_error "OpenSSL не установлен. Установите OpenSSL и повторите попытку."
+        error "OpenSSL is not installed"
         exit 1
     fi
     
-    log_info "OpenSSL версия: $(openssl version)"
+    info "OpenSSL version: $(openssl version)"
 }
 
-# Создаем директорию для сертификатов
-create_cert_dir() {
-    local cert_dir="configs/tls"
-    
-    if [ ! -d "$cert_dir" ]; then
-        log_info "Создаем директорию $cert_dir"
-        mkdir -p "$cert_dir"
-    fi
-    
-    cd "$cert_dir"
+# Показать справку
+show_help() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help        Show this help message"
+    echo "  -c, --clean       Clean existing certificates before generating new ones"
+    echo "  -d, --days DAYS   Certificate validity period in days (default: $DAYS)"
+    echo "  -k, --key-size    Key size in bits (default: $KEY_SIZE)"
+    echo "  -o, --org ORG     Organization name (default: $ORG)"
+    echo "  --country CODE    Country code (default: $COUNTRY)"
+    echo "  --state STATE     State/Province (default: $STATE)"
+    echo "  --city CITY       City/Locality (default: $CITY)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                Generate certificates with default settings"
+    echo "  $0 -c             Clean and regenerate certificates"
+    echo "  $0 -d 365         Generate certificates valid for 1 year"
+    echo "  $0 -k 2048        Use 2048-bit keys"
 }
 
-# Генерируем CA сертификат
-generate_ca() {
-    log_info "Генерируем Certificate Authority (CA)..."
-    
-    if [ -f "ca.key" ] || [ -f "ca.crt" ]; then
-        log_warning "CA сертификат уже существует. Удалите ca.key и ca.crt для пересоздания."
-        return
-    fi
-    
-    # Генерируем CA приватный ключ
-    log_info "Генерируем CA приватный ключ (4096 бит)..."
-    openssl genrsa -out ca.key 4096
-    
-    # Генерируем CA сертификат
-    log_info "Генерируем CA сертификат..."
-    openssl req -new -x509 -days 3650 -key ca.key -out ca.crt \
-        -subj "/C=US/ST=CA/L=San Francisco/O=NovaSec/OU=Security/CN=NovaSec CA" \
-        -addext "basicConstraints=critical,CA:TRUE" \
-        -addext "keyUsage=critical,keyCertSign,cRLSign" \
-        -addext "subjectKeyIdentifier=hash"
-    
-    # Устанавливаем правильные права доступа
-    chmod 600 ca.key
-    chmod 644 ca.crt
-    
-    log_success "CA сертификат создан успешно"
-}
-
-# Генерируем сертификат для сервиса
-generate_service_cert() {
-    local service_name=$1
-    local common_name="${service_name}.novasec.local"
-    
-    log_info "Генерируем сертификат для сервиса $service_name..."
-    
-    if [ -f "${service_name}.key" ] || [ -f "${service_name}.crt" ]; then
-        log_warning "Сертификат для $service_name уже существует. Удалите ${service_name}.key и ${service_name}.crt для пересоздания."
-        return
-    fi
-    
-    # Генерируем приватный ключ
-    log_info "Генерируем приватный ключ для $service_name..."
-    openssl genrsa -out "${service_name}.key" 2048
-    
-    # Создаем конфигурационный файл для SAN
-    cat > "${service_name}.conf" << EOF
-[req]
-distinguished_name = req_distinguished_name
-req_extensions = v3_req
-prompt = no
-
-[req_distinguished_name]
-C = US
-ST = CA
-L = San Francisco
-O = NovaSec
-OU = Security
-CN = $common_name
-
-[v3_req]
-keyUsage = keyEncipherment, dataEncipherment, digitalSignature
-extendedKeyUsage = serverAuth, clientAuth
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = $common_name
-DNS.2 = localhost
-DNS.3 = $service_name
-IP.1 = 127.0.0.1
-IP.2 = ::1
-EOF
-    
-    # Генерируем CSR
-    log_info "Генерируем CSR для $service_name..."
-    openssl req -new -key "${service_name}.key" -out "${service_name}.csr" \
-        -config "${service_name}.conf"
-    
-    # Подписываем сертификат CA
-    log_info "Подписываем сертификат для $service_name..."
-    openssl x509 -req -days 365 -in "${service_name}.csr" \
-        -CA ca.crt -CAkey ca.key -CAcreateserial \
-        -out "${service_name}.crt" -extensions v3_req \
-        -extfile "${service_name}.conf"
-    
-    # Устанавливаем правильные права доступа
-    chmod 600 "${service_name}.key"
-    chmod 644 "${service_name}.crt"
-    
-    # Удаляем временные файлы
-    rm -f "${service_name}.csr" "${service_name}.conf" ca.srl
-    
-    log_success "Сертификат для $service_name создан успешно"
-}
-
-# Генерируем клиентский сертификат
-generate_client_cert() {
-    local client_name="agent"
-    local common_name="${client_name}.novasec.local"
-    
-    log_info "Генерируем клиентский сертификат для агента..."
-    
-    if [ -f "${client_name}.key" ] || [ -f "${client_name}.crt" ]; then
-        log_warning "Клиентский сертификат уже существует. Удалите ${client_name}.key и ${client_name}.crt для пересоздания."
-        return
-    fi
-    
-    # Генерируем приватный ключ
-    log_info "Генерируем приватный ключ для агента..."
-    openssl genrsa -out "${client_name}.key" 2048
-    
-    # Создаем конфигурационный файл для SAN
-    cat > "${client_name}.conf" << EOF
-[req]
-distinguished_name = req_distinguished_name
-req_extensions = v3_req
-prompt = no
-
-[req_distinguished_name]
-C = US
-ST = CA
-L = San Francisco
-O = NovaSec
-OU = Security
-CN = $common_name
-
-[v3_req]
-keyUsage = keyEncipherment, dataEncipherment, digitalSignature
-extendedKeyUsage = clientAuth
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = $common_name
-DNS.2 = localhost
-DNS.3 = agent
-IP.1 = 127.0.0.1
-IP.2 = ::1
-EOF
-    
-    # Генерируем CSR
-    log_info "Генерируем CSR для агента..."
-    openssl req -new -key "${client_name}.key" -out "${client_name}.csr" \
-        -config "${client_name}.conf"
-    
-    # Подписываем сертификат CA
-    log_info "Подписываем сертификат для агента..."
-    openssl x509 -req -days 365 -in "${client_name}.csr" \
-        -CA ca.crt -CAkey ca.key -CAcreateserial \
-        -out "${client_name}.crt" -extensions v3_req \
-        -extfile "${client_name}.conf"
-    
-    # Устанавливаем правильные права доступа
-    chmod 600 "${client_name}.key"
-    chmod 644 "${client_name}.crt"
-    
-    # Удаляем временные файлы
-    rm -f "${client_name}.csr" "${client_name}.conf" ca.srl
-    
-    log_success "Клиентский сертификат создан успешно"
-}
-
-# Проверяем сертификаты
-verify_certificates() {
-    log_info "Проверяем созданные сертификаты..."
-    
-    # Проверяем CA сертификат
-    if [ -f "ca.crt" ]; then
-        log_info "CA сертификат:"
-        openssl x509 -in ca.crt -noout -subject -issuer -dates
-        echo
-    fi
-    
-    # Проверяем сервисные сертификаты
-    for service in ingest normalizer correlator alerting adminapi; do
-        if [ -f "${service}.crt" ]; then
-            log_info "Сертификат $service:"
-            openssl x509 -in "${service}.crt" -noout -subject -issuer -dates
-            echo
-        fi
-    done
-    
-    # Проверяем клиентский сертификат
-    if [ -f "agent.crt" ]; then
-        log_info "Клиентский сертификат:"
-        openssl x509 -in agent.crt -noout -subject -issuer -dates
-        echo
-    fi
-}
-
-# Создаем bundle сертификатов
-create_bundle() {
-    log_info "Создаем bundle сертификатов..."
-    
-    # Bundle для клиентов (CA + клиентский сертификат)
-    if [ -f "ca.crt" ] && [ -f "agent.crt" ]; then
-        cat ca.crt agent.crt > agent-bundle.crt
-        chmod 644 agent-bundle.crt
-        log_success "Bundle для агента создан: agent-bundle.crt"
-    fi
-    
-    # Bundle для сервисов (CA + сервисный сертификат)
-    for service in ingest normalizer correlator alerting adminapi; do
-        if [ -f "ca.crt" ] && [ -f "${service}.crt" ]; then
-            cat ca.crt "${service}.crt" > "${service}-bundle.crt"
-            chmod 644 "${service}-bundle.crt"
-            log_success "Bundle для $service создан: ${service}-bundle.crt"
-        fi
+# Парсинг аргументов командной строки
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -c|--clean)
+                CLEAN_FIRST=true
+                shift
+                ;;
+            -d|--days)
+                DAYS="$2"
+                shift 2
+                ;;
+            -k|--key-size)
+                KEY_SIZE="$2"
+                shift 2
+                ;;
+            -o|--org)
+                ORG="$2"
+                shift 2
+                ;;
+            --country)
+                COUNTRY="$2"
+                shift 2
+                ;;
+            --state)
+                STATE="$2"
+                shift 2
+                ;;
+            --city)
+                CITY="$2"
+                shift 2
+                ;;
+            *)
+                error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
     done
 }
 
 # Основная функция
 main() {
-    local action=${1:-"all"}
+    echo ""
+    log "=== NovaSec TLS Certificate Generator ==="
+    echo ""
     
-    log_info "NovaSec Certificate Generator"
-    log_info "Действие: $action"
+    # Парсинг аргументов
+    parse_args "$@"
     
-    # Проверяем OpenSSL
-    check_openssl
+    # Проверка зависимостей
+    check_dependencies
     
-    # Создаем директорию для сертификатов
-    create_cert_dir
-    
-    case $action in
-        "ca")
-            generate_ca
-            ;;
-        "ingest")
-            generate_service_cert "ingest"
-            ;;
-        "normalizer")
-            generate_service_cert "normalizer"
-            ;;
-        "correlator")
-            generate_service_cert "correlator"
-            ;;
-        "alerting")
-            generate_service_cert "alerting"
-            ;;
-        "adminapi")
-            generate_service_cert "adminapi"
-            ;;
-        "agent"|"client")
-            generate_client_cert
-            ;;
-        "all")
-            generate_ca
-            generate_service_cert "ingest"
-            generate_service_cert "normalizer"
-            generate_service_cert "correlator"
-            generate_service_cert "alerting"
-            generate_service_cert "adminapi"
-            generate_client_cert
-            ;;
-        "verify")
-            verify_certificates
-            ;;
-        "bundle")
-            create_bundle
-            ;;
-        "help"|"-h"|"--help")
-            echo "Использование: $0 [действие]"
-            echo ""
-            echo "Действия:"
-            echo "  all        - Генерировать все сертификаты (по умолчанию)"
-            echo "  ca         - Генерировать только CA сертификат"
-            echo "  ingest     - Генерировать сертификат для ingest сервиса"
-            echo "  normalizer - Генерировать сертификат для normalizer сервиса"
-            echo "  correlator - Генерировать сертификат для correlator сервиса"
-            echo "  alerting   - Генерировать сертификат для alerting сервиса"
-            echo "  adminapi   - Генерировать сертификат для adminapi сервиса"
-            echo "  agent      - Генерировать клиентский сертификат для агента"
-            echo "  verify     - Проверить созданные сертификаты"
-            echo "  bundle     - Создать bundle сертификатов"
-            echo "  help       - Показать эту справку"
-            echo ""
-            echo "Примеры:"
-            echo "  $0                    # Генерировать все сертификаты"
-            echo "  $0 ca                 # Только CA"
-            echo "  $0 ingest             # Только для ingest"
-            echo "  $0 verify             # Проверить сертификаты"
-            exit 0
-            ;;
-        *)
-            log_error "Неизвестное действие: $action"
-            echo "Используйте '$0 help' для справки"
-            exit 1
-            ;;
-    esac
-    
-    if [ "$action" != "verify" ] && [ "$action" != "bundle" ]; then
-        log_info "Проверяем созданные сертификаты..."
-        verify_certificates
-        
-        log_info "Создаем bundle сертификатов..."
-        create_bundle
+    # Очистка существующих сертификатов (если указано)
+    if [ "$CLEAN_FIRST" = true ]; then
+        cleanup_certs
     fi
     
-    log_success "Генерация сертификатов завершена успешно!"
-    log_info "Сертификаты сохранены в директории: $(pwd)"
+    # Создание директории
+    create_dir "$CERTS_DIR"
+    
+    # Переход в директорию сертификатов
+    cd "$CERTS_DIR"
+    
+    info "Configuration:"
+    info "  Organization: $ORG"
+    info "  Country: $COUNTRY"
+    info "  State: $STATE"
+    info "  City: $CITY"
+    info "  Key size: $KEY_SIZE bits"
+    info "  Validity: $DAYS days"
+    echo ""
+    
+    # 1. Создание конфигурационных файлов
+    log "Creating OpenSSL configuration files..."
+    create_ca_config
+    create_server_config
+    create_client_config
+    create_extensions
+    
+    # 2. Генерация приватного ключа CA
+    log "Generating CA private key..."
+    openssl genrsa -out ca-key.pem $KEY_SIZE
+    chmod 400 ca-key.pem
+    
+    # 3. Создание самоподписанного сертификата CA
+    log "Creating CA certificate..."
+    openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days $DAYS -config ca.conf
+    
+    # 4. Генерация приватного ключа сервера
+    log "Generating server private key..."
+    openssl genrsa -out server-key.pem $KEY_SIZE
+    chmod 400 server-key.pem
+    
+    # 5. Создание запроса на подпись сертификата (CSR) для сервера
+    log "Creating server certificate signing request..."
+    openssl req -new -key server-key.pem -out server.csr -config server.conf
+    
+    # 6. Подпись сертификата сервера CA
+    log "Signing server certificate..."
+    openssl x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem \
+        -out server-cert.pem -days $DAYS -extensions v3_req \
+        -extfile server_ext.conf -CAcreateserial
+    
+    # 7. Генерация приватного ключа клиента
+    log "Generating client private key..."
+    openssl genrsa -out client-key.pem $KEY_SIZE
+    chmod 400 client-key.pem
+    
+    # 8. Создание CSR для клиента
+    log "Creating client certificate signing request..."
+    openssl req -new -key client-key.pem -out client.csr -config client.conf
+    
+    # 9. Подпись сертификата клиента CA
+    log "Signing client certificate..."
+    openssl x509 -req -in client.csr -CA ca-cert.pem -CAkey ca-key.pem \
+        -out client-cert.pem -days $DAYS -extensions v3_req \
+        -extfile client_ext.conf -CAcreateserial
+    
+    # 10. Создание комбинированных файлов
+    log "Creating combined certificate files..."
+    cat server-cert.pem ca-cert.pem > server-bundle.pem
+    cat client-cert.pem ca-cert.pem > client-bundle.pem
+    
+    # 11. Создание PFX файлов (если нужно)
+    log "Creating PKCS#12 files..."
+    openssl pkcs12 -export -out server.p12 -inkey server-key.pem \
+        -in server-cert.pem -certfile ca-cert.pem -passout pass:novasec
+    openssl pkcs12 -export -out client.p12 -inkey client-key.pem \
+        -in client-cert.pem -certfile ca-cert.pem -passout pass:novasec
+    
+    # 12. Установка правильных прав доступа
+    log "Setting file permissions..."
+    chmod 644 *.pem *.p12
+    chmod 400 *-key.pem
+    
+    # 13. Очистка временных файлов
+    log "Cleaning up temporary files..."
+    rm -f *.csr *.conf *.srl
+    
+    # 14. Создание README файла
+    log "Creating README file..."
+    cat > README.md << EOF
+# NovaSec TLS Certificates
+
+This directory contains TLS certificates for NovaSec SIEM platform.
+
+## Generated Files
+
+### Certificate Authority (CA)
+- \`ca-cert.pem\` - CA certificate (public)
+- \`ca-key.pem\` - CA private key (keep secure!)
+
+### Server Certificates
+- \`server-cert.pem\` - Server certificate
+- \`server-key.pem\` - Server private key
+- \`server-bundle.pem\` - Server certificate + CA chain
+- \`server.p12\` - Server certificate in PKCS#12 format (password: novasec)
+
+### Client Certificates
+- \`client-cert.pem\` - Client certificate
+- \`client-key.pem\` - Client private key
+- \`client-bundle.pem\` - Client certificate + CA chain
+- \`client.p12\` - Client certificate in PKCS#12 format (password: novasec)
+
+## Configuration
+
+These certificates are configured for the following domains/IPs:
+- localhost
+- novasec-ingest
+- novasec-api
+- novasec-admin
+- *.novasec.local
+- 127.0.0.1
+- ::1
+
+## Security Notes
+
+1. **Keep private keys secure** - Never share or commit \`*-key.pem\` files
+2. **Certificate validation** - Always validate certificates in production
+3. **Regular rotation** - Rotate certificates before expiration
+4. **Backup** - Keep secure backups of CA private key
+
+## Usage Examples
+
+### Docker Compose
+Mount the certificates directory:
+\`\`\`yaml
+volumes:
+  - ./configs/tls:/etc/ssl/novasec:ro
+\`\`\`
+
+### Nginx Configuration
+\`\`\`nginx
+ssl_certificate /etc/ssl/novasec/server-bundle.pem;
+ssl_certificate_key /etc/ssl/novasec/server-key.pem;
+ssl_trusted_certificate /etc/ssl/novasec/ca-cert.pem;
+\`\`\`
+
+### Go TLS Client
+\`\`\`go
+cert, err := tls.LoadX509KeyPair("client-cert.pem", "client-key.pem")
+\`\`\`
+
+## Certificate Information
+
+- **Validity**: $DAYS days
+- **Key Size**: $KEY_SIZE bits
+- **Algorithm**: RSA
+- **Generated**: $(date)
+- **Organization**: $ORG
+
+## Verification Commands
+
+Verify certificate:
+\`\`\`bash
+openssl x509 -in server-cert.pem -text -noout
+\`\`\`
+
+Verify certificate chain:
+\`\`\`bash
+openssl verify -CAfile ca-cert.pem server-cert.pem
+\`\`\`
+
+Test TLS connection:
+\`\`\`bash
+openssl s_client -connect localhost:443 -cert client-cert.pem -key client-key.pem
+\`\`\`
+EOF
+    
+    # Возврат в исходную директорию
+    cd - > /dev/null
+    
+    # 15. Проверка сгенерированных сертификатов
+    log "Verifying generated certificates..."
+    
+    echo ""
+    info "=== Certificate Verification ==="
+    
+    # Проверка CA сертификата
+    echo "CA Certificate:"
+    openssl x509 -in "$CERTS_DIR/ca-cert.pem" -noout -subject -issuer -dates
+    
+    echo ""
+    echo "Server Certificate:"
+    openssl x509 -in "$CERTS_DIR/server-cert.pem" -noout -subject -issuer -dates
+    
+    echo ""
+    echo "Client Certificate:"
+    openssl x509 -in "$CERTS_DIR/client-cert.pem" -noout -subject -issuer -dates
+    
+    # Проверка цепочки сертификатов
+    echo ""
+    info "Certificate chain verification:"
+    if openssl verify -CAfile "$CERTS_DIR/ca-cert.pem" "$CERTS_DIR/server-cert.pem" > /dev/null 2>&1; then
+        log "✓ Server certificate chain is valid"
+    else
+        error "✗ Server certificate chain is invalid"
+    fi
+    
+    if openssl verify -CAfile "$CERTS_DIR/ca-cert.pem" "$CERTS_DIR/client-cert.pem" > /dev/null 2>&1; then
+        log "✓ Client certificate chain is valid"
+    else
+        error "✗ Client certificate chain is invalid"
+    fi
+    
+    echo ""
+    log "=== Certificate Generation Complete ==="
+    log "Certificates are available in: $CERTS_DIR"
+    log "Documentation: $CERTS_DIR/README.md"
+    warn "Keep private keys secure and never commit them to version control!"
+    echo ""
 }
 
-# Запускаем основную функцию
+# Выполнение основной функции
 main "$@"

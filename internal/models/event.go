@@ -1,4 +1,4 @@
-// internal/models/event.go
+// filename: internal/models/event.go
 package models
 
 import (
@@ -11,23 +11,39 @@ import (
 
 // Event представляет единую модель события для SIEM/HIDS платформы
 type Event struct {
-	TS        time.Time            `json:"ts" validate:"required"`
-	Host      string               `json:"host" validate:"required"`
-	AgentID   string               `json:"agent_id"`
-	Env       string               `json:"env"`
-	Source    string               `json:"source"`
-	Severity  string               `json:"severity"`
-	Category  string               `json:"category" validate:"required"`
-	Subtype   string               `json:"subtype" validate:"required"`
-	Message   string               `json:"message" validate:"required"`
-	User      *User                `json:"user,omitempty"`
-	Network   *Network             `json:"network,omitempty"`
-	File      *File                `json:"file,omitempty"`
-	Process   *Process             `json:"process,omitempty"`
-	Hashes    *Hashes              `json:"hashes,omitempty"`
-	Labels    map[string]string    `json:"labels,omitempty"`
-	Enrich    *Enrichment          `json:"enrich,omitempty"`
-	Raw       string               `json:"raw,omitempty"`
+	TS       time.Time         `json:"ts" validate:"required"`
+	Host     string            `json:"host" validate:"required"`
+	AgentID  string            `json:"agent_id"`
+	Env      string            `json:"env"`
+	Source   string            `json:"source"`
+	Severity string            `json:"severity"`
+	Category string            `json:"category" validate:"required"`
+	Subtype  string            `json:"subtype" validate:"required"`
+	Message  string            `json:"message" validate:"required"`
+	User     *User             `json:"user,omitempty"`
+	Network  *Network          `json:"network,omitempty"`
+	File     *File             `json:"file,omitempty"`
+	Process  *Process          `json:"process,omitempty"`
+	Hashes   *Hashes           `json:"hashes,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Enrich   *Enrichment       `json:"enrich,omitempty"`
+	Raw      string            `json:"raw,omitempty"`
+
+	// Плоские поля для совместимости с ClickHouse
+	UserName    string `json:"user_name,omitempty"`
+	UserUID     *int   `json:"user_uid,omitempty"`
+	SrcIP       string `json:"src_ip,omitempty"`
+	SrcPort     *int   `json:"src_port,omitempty"`
+	DstIP       string `json:"dst_ip,omitempty"`
+	DstPort     *int   `json:"dst_port,omitempty"`
+	Proto       string `json:"proto,omitempty"`
+	FilePath    string `json:"file_path,omitempty"`
+	ProcessPID  *int   `json:"process_pid,omitempty"`
+	ProcessName string `json:"process_name,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Geo         string `json:"geo,omitempty"`
+	ASN         *int   `json:"asn,omitempty"`
+	IOC         string `json:"ioc,omitempty"`
 }
 
 // User представляет информацию о пользователе
@@ -38,9 +54,9 @@ type User struct {
 
 // Network представляет сетевую информацию
 type Network struct {
-	SrcIP   *int   `json:"src_ip,omitempty"`
+	SrcIP   string `json:"src_ip,omitempty"`
 	SrcPort *int   `json:"src_port,omitempty"`
-	DstIP   *int   `json:"dst_ip,omitempty"`
+	DstIP   string `json:"dst_ip,omitempty"`
 	DstPort *int   `json:"dst_port,omitempty"`
 	Proto   string `json:"proto,omitempty"`
 }
@@ -108,6 +124,9 @@ func NewEventFromNDJSON(ndjsonLine string) (*Event, error) {
 		event.Labels = make(map[string]string)
 	}
 
+	// Заполняем плоские поля
+	event.FillFlatFields()
+
 	return &event, nil
 }
 
@@ -131,11 +150,11 @@ func (e *Event) GetNetworkIPAsString() string {
 	if e.Network == nil {
 		return ""
 	}
-	if e.Network.SrcIP != nil {
-		return fmt.Sprintf("%d", *e.Network.SrcIP)
+	if e.Network.SrcIP != "" {
+		return e.Network.SrcIP
 	}
-	if e.Network.DstIP != nil {
-		return fmt.Sprintf("%d", *e.Network.DstIP)
+	if e.Network.DstIP != "" {
+		return e.Network.DstIP
 	}
 	return ""
 }
@@ -166,17 +185,78 @@ func (e *Event) SetTimestampFromUnixMilli(unixMilli int64) {
 	e.TS = time.UnixMilli(unixMilli)
 }
 
+// FillFlatFields заполняет плоские поля из вложенных структур // v1.0
+func (e *Event) FillFlatFields() {
+	// Заполняем поля пользователя
+	if e.User != nil {
+		e.UserName = e.User.Name
+		e.UserUID = e.User.UID
+	} else {
+		e.UserName = ""
+		e.UserUID = nil
+	}
+
+	// Заполняем сетевые поля
+	if e.Network != nil {
+		e.SrcIP = e.Network.SrcIP
+		e.SrcPort = e.Network.SrcPort
+		e.DstIP = e.Network.DstIP
+		e.DstPort = e.Network.DstPort
+		e.Proto = e.Network.Proto
+	} else {
+		e.SrcIP = ""
+		e.SrcPort = nil
+		e.DstIP = ""
+		e.DstPort = nil
+		e.Proto = ""
+	}
+
+	// Заполняем поля файла
+	if e.File != nil {
+		e.FilePath = e.File.Path
+	} else {
+		e.FilePath = ""
+	}
+
+	// Заполняем поля процесса
+	if e.Process != nil {
+		e.ProcessPID = e.Process.PID
+		e.ProcessName = e.Process.Name
+	} else {
+		e.ProcessPID = nil
+		e.ProcessName = ""
+	}
+
+	// Заполняем хеши
+	if e.Hashes != nil {
+		e.SHA256 = e.Hashes.SHA256
+	} else {
+		e.SHA256 = ""
+	}
+
+	// Заполняем обогащенные данные
+	if e.Enrich != nil {
+		e.Geo = e.Enrich.Geo
+		e.ASN = e.Enrich.ASN
+		e.IOC = e.Enrich.IOC
+	} else {
+		e.Geo = ""
+		e.ASN = nil
+		e.IOC = ""
+	}
+}
+
 // ParseIPPort парсит IP:port строку // v1.0
 func ParseIPPort(ipPort string) (string, int, error) {
 	parts := strings.Split(ipPort, ":")
 	if len(parts) != 2 {
 		return "", 0, fmt.Errorf("invalid IP:port format: %s", ipPort)
 	}
-	
+
 	port, err := strconv.Atoi(parts[1])
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid port: %s", parts[1])
 	}
-	
+
 	return parts[0], port, nil
 }
