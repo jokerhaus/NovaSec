@@ -292,6 +292,35 @@ services:
     depends_on:
       - prometheus
 
+  # Wazuh Agent с интеграцией NovaSec
+  wazuh-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.wazuh-agent
+    container_name: novasec-wazuh-agent
+    environment:
+      - WAZUH_MANAGER=localhost
+      - WAZUH_MANAGER_PORT=1514
+      - WAZUH_AGENT_NAME=novasec-agent
+      - WAZUH_AGENT_GROUP=default
+      - NOVASEC_ENDPOINT=http://novasec-ingest:8080/api/v1/events
+      - NOVASEC_API_KEY=""
+    volumes:
+      - wazuh-agent-logs:/var/ossec/logs
+      - wazuh-agent-queue:/var/ossec/queue
+      - wazuh-agent-var:/var/ossec/var
+    networks:
+      - novasec-network
+    depends_on:
+      novasec-ingest:
+        condition: service_healthy
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+      - AUDIT_CONTROL
+      - AUDIT_READ
+
 volumes:
   nats-data:
     driver: local
@@ -306,6 +335,12 @@ volumes:
   prometheus-data:
     driver: local
   grafana-data:
+    driver: local
+  wazuh-agent-logs:
+    driver: local
+  wazuh-agent-queue:
+    driver: local
+  wazuh-agent-var:
     driver: local
 
 networks:

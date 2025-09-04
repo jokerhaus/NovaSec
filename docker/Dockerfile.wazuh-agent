@@ -1,0 +1,117 @@
+# filename: docker/Dockerfile.wazuh-agent
+# Dockerfile для Wazuh агента с интеграцией NovaSec
+
+FROM ubuntu:22.04
+
+# Устанавливаем переменные окружения
+ENV DEBIAN_FRONTEND=noninteractive
+ENV WAZUH_MANAGER=localhost
+ENV WAZUH_MANAGER_PORT=1514
+ENV WAZUH_AGENT_NAME=novasec-agent
+ENV WAZUH_AGENT_GROUP=default
+ENV NOVASEC_ENDPOINT=http://localhost:8080/api/v1/events
+ENV NOVASEC_API_KEY=""
+
+# Устанавливаем необходимые пакеты
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    gnupg \
+    lsb-release \
+    systemd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Добавляем репозиторий Wazuh
+RUN curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import && chmod 644 /usr/share/keyrings/wazuh.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | tee -a /etc/apt/sources.list.d/wazuh.list
+
+# Устанавливаем Wazuh агент
+RUN apt-get update && apt-get install -y wazuh-agent=4.7.0-1
+
+# Создаем скрипт для интеграции с NovaSec
+RUN echo '#!/bin/bash\n\
+# Скрипт для отправки событий Wazuh в NovaSec\n\
+\n\
+NOVASEC_ENDPOINT=${NOVASEC_ENDPOINT:-"http://localhost:8080/api/v1/events"}\n\
+NOVASEC_API_KEY=${NOVASEC_API_KEY:-""}\n\
+WAZUH_LOG_FILE="/var/ossec/logs/alerts/alerts.json"\n\
+\n\
+# Функция для отправки события в NovaSec\n\
+send_to_novasec() {\n\
+    local event_data="$1"\n\
+    \n\
+    if [ -n "$NOVASEC_API_KEY" ]; then\n\
+        curl -X POST "$NOVASEC_ENDPOINT" \\\n\
+            -H "Content-Type: application/json" \\\n\
+            -H "Authorization: Bearer $NOVASEC_API_KEY" \\\n\
+            -d "$event_data"\n\
+    else\n\
+        curl -X POST "$NOVASEC_ENDPOINT" \\\n\
+            -H "Content-Type: application/json" \\\n\
+            -d "$event_data"\n\
+    fi\n\
+}\n\
+\n\
+# Мониторим файл логов Wazuh\n\
+tail -f "$WAZUH_LOG_FILE" | while read line; do\n\
+    if [ -n "$line" ]; then\n\
+        echo "Sending event to NovaSec: $line"\n\
+        send_to_novasec "$line"\n\
+    fi\n\
+done\n\
+' > /usr/local/bin/wazuh-novasec-integration.sh
+
+RUN chmod +x /usr/local/bin/wazuh-novasec-integration.sh
+
+# Создаем systemd сервис для интеграции
+RUN echo '[Unit]\n\
+Description=Wazuh NovaSec Integration\n\
+After=wazuh-agent.service\n\
+Requires=wazuh-agent.service\n\
+\n\
+[Service]\n\
+Type=simple\n\
+ExecStart=/usr/local/bin/wazuh-novasec-integration.sh\n\
+Restart=always\n\
+RestartSec=10\n\
+Environment=NOVASEC_ENDPOINT=${NOVASEC_ENDPOINT}\n\
+Environment=NOVASEC_API_KEY=${NOVASEC_API_KEY}\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n\
+' > /etc/systemd/system/wazuh-novasec-integration.service
+
+# Создаем скрипт запуска
+RUN echo '#!/bin/bash\n\
+# Скрипт запуска Wazuh агента с интеграцией NovaSec\n\
+\n\
+# Настраиваем Wazuh агент\n\
+if [ -n "$WAZUH_MANAGER" ]; then\n\
+    sed -i "s/^<server>.*/<server><hostname>$WAZUH_MANAGER<\/hostname><port>$WAZUH_MANAGER_PORT<\/port><\/server>/" /var/ossec/etc/ossec.conf\n\
+fi\n\
+\n\
+if [ -n "$WAZUH_AGENT_NAME" ]; then\n\
+    sed -i "s/^<agent_name>.*/<agent_name>$WAZUH_AGENT_NAME<\/agent_name>/" /var/ossec/etc/ossec.conf\n\
+fi\n\
+\n\
+if [ -n "$WAZUH_AGENT_GROUP" ]; then\n\
+    sed -i "s/^<agent_group>.*/<agent_group>$WAZUH_AGENT_GROUP<\/agent_group>/" /var/ossec/etc/ossec.conf\n\
+fi\n\
+\n\
+# Запускаем Wazuh агент\n\
+systemctl start wazuh-agent\n\
+\n\
+# Запускаем интеграцию с NovaSec\n\
+systemctl start wazuh-novasec-integration\n\
+\n\
+# Ждем завершения\n\
+wait\n\
+' > /usr/local/bin/start-wazuh-agent.sh
+
+RUN chmod +x /usr/local/bin/start-wazuh-agent.sh
+
+# Открываем порты
+EXPOSE 1514
+
+# Устанавливаем точку входа
+ENTRYPOINT ["/usr/local/bin/start-wazuh-agent.sh"]

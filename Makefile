@@ -157,7 +157,7 @@ logs: ## Показать логи всех сервисов
 	@docker-compose -f $(DOCKER_COMPOSE) logs -f
 
 # Логи конкретного сервиса
-.PHONY: logs-ingest logs-normalizer logs-correlator logs-alerting logs-adminapi
+.PHONY: logs-ingest logs-normalizer logs-correlator logs-alerting logs-adminapi logs-wazuh
 logs-ingest: ## Показать логи ingest сервиса
 	@docker-compose -f $(DOCKER_COMPOSE) logs -f novasec-ingest
 
@@ -172,6 +172,9 @@ logs-alerting: ## Показать логи alerting сервиса
 
 logs-adminapi: ## Показать логи adminapi сервиса
 	@docker-compose -f $(DOCKER_COMPOSE) logs -f novasec-adminapi
+
+logs-wazuh: ## Показать логи Wazuh агента
+	@docker-compose -f $(DOCKER_COMPOSE) logs -f wazuh-agent
 
 # Запуск тестов
 .PHONY: test
@@ -352,6 +355,44 @@ check-config: ## Проверить конфигурационные файлы
 		echo "✗ services.yml не найден (используйте services.example.yml)"; \
 	fi
 	$(call log_info,"Проверка конфигурации завершена")
+
+# Команды для работы с Wazuh агентом
+.PHONY: wazuh-build wazuh-start wazuh-stop wazuh-restart wazuh-status wazuh-test
+wazuh-build: ## Собрать Docker образ Wazuh агента
+	$(call log_info,"Собираем Docker образ Wazuh агента...")
+	@docker build -f docker/Dockerfile.wazuh-agent -t novasec-wazuh-agent .
+	$(call log_success,"Docker образ Wazuh агента собран")
+
+wazuh-start: ## Запустить Wazuh агент
+	$(call log_info,"Запускаем Wazuh агент...")
+	@docker-compose -f $(DOCKER_COMPOSE) up -d wazuh-agent
+	$(call log_success,"Wazuh агент запущен")
+
+wazuh-stop: ## Остановить Wazuh агент
+	$(call log_info,"Останавливаем Wazuh агент...")
+	@docker-compose -f $(DOCKER_COMPOSE) stop wazuh-agent
+	$(call log_success,"Wazuh агент остановлен")
+
+wazuh-restart: ## Перезапустить Wazuh агент
+	$(call log_info,"Перезапускаем Wazuh агент...")
+	@docker-compose -f $(DOCKER_COMPOSE) restart wazuh-agent
+	$(call log_success,"Wazuh агент перезапущен")
+
+wazuh-status: ## Показать статус Wazuh агента
+	$(call log_info,"Статус Wazuh агента:")
+	@docker-compose -f $(DOCKER_COMPOSE) ps wazuh-agent
+
+wazuh-test: ## Тестировать парсер Wazuh
+	$(call log_info,"Тестируем парсер Wazuh...")
+	@go test -v ./internal/normalizer/parsers/ -run TestWazuhParser
+	$(call log_success,"Тесты парсера Wazuh завершены")
+
+wazuh-send-test: ## Отправить тестовое событие Wazuh
+	$(call log_info,"Отправляем тестовое событие Wazuh...")
+	@curl -X POST http://localhost:8080/api/v1/events \
+		-H "Content-Type: application/json" \
+		-d @internal/fixtures/wazuh_sample_events.jsonl
+	$(call log_success,"Тестовое событие отправлено")
 
 # Инициализация проекта
 .PHONY: init

@@ -33,6 +33,7 @@ func NewParserRegistry() *ParserRegistry {
 	registry.RegisterParser("linux_auth", NewLinuxAuthParser())
 	registry.RegisterParser("nginx_access", NewNginxAccessParser())
 	registry.RegisterParser("windows_eventlog", NewWindowsEventLogParser())
+	registry.RegisterParser("wazuh", NewWazuhParser())
 
 	return registry
 }
