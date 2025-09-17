@@ -4,6 +4,11 @@
 
 set -e
 
+# Определяем абсолютные пути, чтобы скрипт работал из любой директории
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CERTS_RELATIVE_PATH="configs/tls"
+
 # Цвета для вывода
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -12,7 +17,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Конфигурация
-CERTS_DIR="configs/tls"
+CERTS_DIR="$REPO_ROOT/$CERTS_RELATIVE_PATH"
 CA_NAME="novasec-ca"
 SERVER_NAME="novasec-server"
 CLIENT_NAME="novasec-client"
@@ -271,7 +276,10 @@ main() {
     create_dir "$CERTS_DIR"
     
     # Переход в директорию сертификатов
-    cd "$CERTS_DIR"
+    if ! pushd "$CERTS_DIR" > /dev/null; then
+        error "Failed to enter certificates directory: $CERTS_DIR"
+        exit 1
+    fi
     
     info "Configuration:"
     info "  Organization: $ORG"
@@ -440,7 +448,7 @@ openssl s_client -connect localhost:443 -cert client-cert.pem -key client-key.pe
 EOF
     
     # Возврат в исходную директорию
-    cd - > /dev/null
+    popd > /dev/null
     
     # 15. Проверка сгенерированных сертификатов
     log "Verifying generated certificates..."
@@ -477,8 +485,8 @@ EOF
     
     echo ""
     log "=== Certificate Generation Complete ==="
-    log "Certificates are available in: $CERTS_DIR"
-    log "Documentation: $CERTS_DIR/README.md"
+    log "Certificates are available in: $CERTS_RELATIVE_PATH"
+    log "Documentation: $CERTS_RELATIVE_PATH/README.md"
     warn "Keep private keys secure and never commit them to version control!"
     echo ""
 }
