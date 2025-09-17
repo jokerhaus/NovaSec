@@ -207,9 +207,16 @@ func TestWazuhIntegrationSampleData(t *testing.T) {
 	} else {
 		sampleContent := string(content)
 		expectedEvents := []string{
+			"Agent connected to manager",
+			"Integrity check started",
+			"SSH login success",
 			"SSH login failed",
 			"File added to the system",
-			"High number of failed login attempts",
+			"File '/etc/ssh/sshd_config' was modified",
+			"User executed sudo command",
+			"firewalld: Denied TCP connection",
+			"Malware detected in /tmp/malicious.bin",
+			"Rootkit detected on system",
 		}
 
 		for _, event := range expectedEvents {

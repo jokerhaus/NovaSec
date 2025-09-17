@@ -59,6 +59,7 @@ func NewPipeline(config *Config, logger *logging.Logger, natsClient *nats.Client
 		parsers.NewLinuxAuthParser(),
 		parsers.NewNginxAccessParser(),
 		parsers.NewWindowsEventLogParser(),
+		parsers.NewWazuhParser(),
 	}
 
 	return &Pipeline{

@@ -65,7 +65,7 @@ cleanup_certs() {
 
 # Функция создания конфигурации OpenSSL для CA
 create_ca_config() {
-    cat > "$CERTS_DIR/ca.conf" << EOF
+    cat > "ca.conf" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -90,7 +90,7 @@ EOF
 
 # Функция создания конфигурации OpenSSL для сервера
 create_server_config() {
-    cat > "$CERTS_DIR/server.conf" << EOF
+    cat > "server.conf" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -123,7 +123,7 @@ EOF
 
 # Функция создания конфигурации OpenSSL для клиента
 create_client_config() {
-    cat > "$CERTS_DIR/client.conf" << EOF
+    cat > "client.conf" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -147,7 +147,8 @@ EOF
 
 # Функция создания расширений для подписи сертификатов
 create_extensions() {
-    cat > "$CERTS_DIR/server_ext.conf" << EOF
+    cat > "server_ext.conf" << EOF
+[ v3_req ]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
@@ -163,7 +164,8 @@ IP.1 = 127.0.0.1
 IP.2 = ::1
 EOF
 
-    cat > "$CERTS_DIR/client_ext.conf" << EOF
+    cat > "client_ext.conf" << EOF
+[ v3_req ]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation,digitalSignature,keyEncipherment
 extendedKeyUsage = clientAuth
