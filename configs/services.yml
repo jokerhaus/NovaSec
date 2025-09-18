@@ -14,8 +14,8 @@ clickhouse:
   hosts:
     - "clickhouse"
   database: "novasec"
-  username: "default"
-  password: ""
+  username: "novasec"
+  password: "novasec123"
   port: 9000
   secure: false
   compress: true
@@ -28,7 +28,7 @@ postgresql:
   port: 5432
   database: "novasec"
   username: "novasec"
-  password: "novasec"
+  password: "novasec123"
   ssl_mode: "disable"
   max_open_conns: 100
   max_idle_conns: 10
@@ -37,12 +37,12 @@ postgresql:
 redis:
   host: "redis"
   port: 6379
-  password: ""
+  password: "novasec123"
   db: 0
   timeout: "5s"
 
 smtp:
-  host: "localhost"
+  host: "smtp"
   port: 587
   username: "noreply@novasec.local"
   password: ""
