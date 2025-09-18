@@ -50,6 +50,7 @@ logs/
 configs/tls/*.crt
 configs/tls/*.key
 configs/tls/*.pem
+configs/tls/*.p12
 
 # Docker
 .dockerignore

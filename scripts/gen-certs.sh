@@ -28,6 +28,31 @@ STATE="CA"
 CITY="San Francisco"
 ORG="NovaSec"
 OU="Security Operations"
+CLEAN_FIRST=false
+
+CA_CONF="$CERTS_DIR/ca.conf"
+SERVER_CONF="$CERTS_DIR/server.conf"
+CLIENT_CONF="$CERTS_DIR/client.conf"
+SERVER_EXT_CONF="$CERTS_DIR/server_ext.conf"
+CLIENT_EXT_CONF="$CERTS_DIR/client_ext.conf"
+
+CA_KEY="$CERTS_DIR/ca-key.pem"
+CA_CERT="$CERTS_DIR/ca-cert.pem"
+CA_SERIAL="$CERTS_DIR/ca-cert.srl"
+
+SERVER_KEY="$CERTS_DIR/server-key.pem"
+SERVER_CERT="$CERTS_DIR/server-cert.pem"
+SERVER_CSR="$CERTS_DIR/server.csr"
+SERVER_BUNDLE="$CERTS_DIR/server-bundle.pem"
+SERVER_P12="$CERTS_DIR/server.p12"
+
+CLIENT_KEY="$CERTS_DIR/client-key.pem"
+CLIENT_CERT="$CERTS_DIR/client-cert.pem"
+CLIENT_CSR="$CERTS_DIR/client.csr"
+CLIENT_BUNDLE="$CERTS_DIR/client-bundle.pem"
+CLIENT_P12="$CERTS_DIR/client.p12"
+
+README_FILE="$CERTS_DIR/README.md"
 
 # Функции логирования
 log() {
@@ -64,13 +89,13 @@ generate_serial() {
 cleanup_certs() {
     if [ -d "$CERTS_DIR" ]; then
         warn "Removing existing certificates..."
-        rm -rf "$CERTS_DIR"/*
+        rm -rf "$CERTS_DIR"
     fi
 }
 
 # Функция создания конфигурации OpenSSL для CA
 create_ca_config() {
-    cat > "ca.conf" << EOF
+    cat > "$CA_CONF" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -95,7 +120,7 @@ EOF
 
 # Функция создания конфигурации OpenSSL для сервера
 create_server_config() {
-    cat > "server.conf" << EOF
+    cat > "$SERVER_CONF" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -128,7 +153,7 @@ EOF
 
 # Функция создания конфигурации OpenSSL для клиента
 create_client_config() {
-    cat > "client.conf" << EOF
+    cat > "$CLIENT_CONF" << EOF
 [ req ]
 default_bits = $KEY_SIZE
 distinguished_name = req_distinguished_name
@@ -152,7 +177,7 @@ EOF
 
 # Функция создания расширений для подписи сертификатов
 create_extensions() {
-    cat > "server_ext.conf" << EOF
+    cat > "$SERVER_EXT_CONF" << EOF
 [ v3_req ]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation,digitalSignature,keyEncipherment
@@ -169,7 +194,7 @@ IP.1 = 127.0.0.1
 IP.2 = ::1
 EOF
 
-    cat > "client_ext.conf" << EOF
+    cat > "$CLIENT_EXT_CONF" << EOF
 [ v3_req ]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation,digitalSignature,keyEncipherment
@@ -275,12 +300,6 @@ main() {
     # Создание директории
     create_dir "$CERTS_DIR"
     
-    # Переход в директорию сертификатов
-    if ! pushd "$CERTS_DIR" > /dev/null; then
-        error "Failed to enter certificates directory: $CERTS_DIR"
-        exit 1
-    fi
-    
     info "Configuration:"
     info "  Organization: $ORG"
     info "  Country: $COUNTRY"
@@ -299,67 +318,76 @@ main() {
     
     # 2. Генерация приватного ключа CA
     log "Generating CA private key..."
-    openssl genrsa -out ca-key.pem $KEY_SIZE
-    chmod 400 ca-key.pem
+    openssl genrsa -out "$CA_KEY" $KEY_SIZE
+    chmod 400 "$CA_KEY"
     
     # 3. Создание самоподписанного сертификата CA
     log "Creating CA certificate..."
-    openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days $DAYS -config ca.conf
+    openssl req -new -x509 -key "$CA_KEY" -out "$CA_CERT" -days $DAYS -config "$CA_CONF"
     
     # 4. Генерация приватного ключа сервера
     log "Generating server private key..."
-    openssl genrsa -out server-key.pem $KEY_SIZE
-    chmod 400 server-key.pem
+    openssl genrsa -out "$SERVER_KEY" $KEY_SIZE
+    chmod 400 "$SERVER_KEY"
     
     # 5. Создание запроса на подпись сертификата (CSR) для сервера
     log "Creating server certificate signing request..."
-    openssl req -new -key server-key.pem -out server.csr -config server.conf
+    openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" -config "$SERVER_CONF"
     
     # 6. Подпись сертификата сервера CA
     log "Signing server certificate..."
-    openssl x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem \
-        -out server-cert.pem -days $DAYS -extensions v3_req \
-        -extfile server_ext.conf -CAcreateserial
+    rm -f "$CA_SERIAL"
+    openssl x509 -req -in "$SERVER_CSR" -CA "$CA_CERT" -CAkey "$CA_KEY" \
+        -out "$SERVER_CERT" -days $DAYS -extensions v3_req \
+        -extfile "$SERVER_EXT_CONF" -CAcreateserial -CAserial "$CA_SERIAL"
     
     # 7. Генерация приватного ключа клиента
     log "Generating client private key..."
-    openssl genrsa -out client-key.pem $KEY_SIZE
-    chmod 400 client-key.pem
+    openssl genrsa -out "$CLIENT_KEY" $KEY_SIZE
+    chmod 400 "$CLIENT_KEY"
     
     # 8. Создание CSR для клиента
     log "Creating client certificate signing request..."
-    openssl req -new -key client-key.pem -out client.csr -config client.conf
+    openssl req -new -key "$CLIENT_KEY" -out "$CLIENT_CSR" -config "$CLIENT_CONF"
     
     # 9. Подпись сертификата клиента CA
     log "Signing client certificate..."
-    openssl x509 -req -in client.csr -CA ca-cert.pem -CAkey ca-key.pem \
-        -out client-cert.pem -days $DAYS -extensions v3_req \
-        -extfile client_ext.conf -CAcreateserial
+    openssl x509 -req -in "$CLIENT_CSR" -CA "$CA_CERT" -CAkey "$CA_KEY" \
+        -out "$CLIENT_CERT" -days $DAYS -extensions v3_req \
+        -extfile "$CLIENT_EXT_CONF" -CAserial "$CA_SERIAL"
     
     # 10. Создание комбинированных файлов
     log "Creating combined certificate files..."
-    cat server-cert.pem ca-cert.pem > server-bundle.pem
-    cat client-cert.pem ca-cert.pem > client-bundle.pem
+    cat "$SERVER_CERT" "$CA_CERT" > "$SERVER_BUNDLE"
+    cat "$CLIENT_CERT" "$CA_CERT" > "$CLIENT_BUNDLE"
     
     # 11. Создание PFX файлов (если нужно)
     log "Creating PKCS#12 files..."
-    openssl pkcs12 -export -out server.p12 -inkey server-key.pem \
-        -in server-cert.pem -certfile ca-cert.pem -passout pass:novasec
-    openssl pkcs12 -export -out client.p12 -inkey client-key.pem \
-        -in client-cert.pem -certfile ca-cert.pem -passout pass:novasec
+    openssl pkcs12 -export -out "$SERVER_P12" -inkey "$SERVER_KEY" \
+        -in "$SERVER_CERT" -certfile "$CA_CERT" -passout pass:novasec
+    openssl pkcs12 -export -out "$CLIENT_P12" -inkey "$CLIENT_KEY" \
+        -in "$CLIENT_CERT" -certfile "$CA_CERT" -passout pass:novasec
     
     # 12. Установка правильных прав доступа
     log "Setting file permissions..."
-    chmod 644 *.pem *.p12
-    chmod 400 *-key.pem
+    chmod 644 "$CA_CERT" "$SERVER_CERT" "$CLIENT_CERT" "$SERVER_BUNDLE" "$CLIENT_BUNDLE" "$SERVER_P12" "$CLIENT_P12"
+    chmod 400 "$CA_KEY" "$SERVER_KEY" "$CLIENT_KEY"
     
     # 13. Очистка временных файлов
     log "Cleaning up temporary files..."
-    rm -f *.csr *.conf *.srl
-    
-    # 14. Создание README файла
+    rm -f "$SERVER_CSR" "$CLIENT_CSR" "$CA_CONF" "$SERVER_CONF" "$CLIENT_CONF" "$SERVER_EXT_CONF" "$CLIENT_EXT_CONF" "$CA_SERIAL"
+
+    # 14. Создание алиасов для конфигураций
+    log "Creating compatibility symlinks..."
+    ln -sf "ca-cert.pem" "$CERTS_DIR/ca.crt"
+    ln -sf "server-cert.pem" "$CERTS_DIR/service.crt"
+    ln -sf "server-key.pem" "$CERTS_DIR/service.key"
+    ln -sf "server-cert.pem" "$CERTS_DIR/ingest.crt"
+    ln -sf "server-key.pem" "$CERTS_DIR/ingest.key"
+
+    # 15. Создание README файла
     log "Creating README file..."
-    cat > README.md << EOF
+    cat > "$README_FILE" << EOF
 # NovaSec TLS Certificates
 
 This directory contains TLS certificates for NovaSec SIEM platform.
@@ -381,6 +409,13 @@ This directory contains TLS certificates for NovaSec SIEM platform.
 - \`client-key.pem\` - Client private key
 - \`client-bundle.pem\` - Client certificate + CA chain
 - \`client.p12\` - Client certificate in PKCS#12 format (password: novasec)
+
+## Compatibility Links
+
+These symlinks align with default NovaSec configuration paths:
+- \`ca.crt\` → \`ca-cert.pem\`
+- \`service.crt\` / \`service.key\` → \`server-cert.pem\` / \`server-key.pem\`
+- \`ingest.crt\` / \`ingest.key\` → \`server-cert.pem\` / \`server-key.pem\`
 
 ## Configuration
 
@@ -447,37 +482,34 @@ openssl s_client -connect localhost:443 -cert client-cert.pem -key client-key.pe
 \`\`\`
 EOF
     
-    # Возврат в исходную директорию
-    popd > /dev/null
-    
-    # 15. Проверка сгенерированных сертификатов
+    # 16. Проверка сгенерированных сертификатов
     log "Verifying generated certificates..."
-    
+
     echo ""
     info "=== Certificate Verification ==="
-    
+
     # Проверка CA сертификата
     echo "CA Certificate:"
-    openssl x509 -in "$CERTS_DIR/ca-cert.pem" -noout -subject -issuer -dates
-    
+    openssl x509 -in "$CA_CERT" -noout -subject -issuer -dates
+
     echo ""
     echo "Server Certificate:"
-    openssl x509 -in "$CERTS_DIR/server-cert.pem" -noout -subject -issuer -dates
-    
+    openssl x509 -in "$SERVER_CERT" -noout -subject -issuer -dates
+
     echo ""
     echo "Client Certificate:"
-    openssl x509 -in "$CERTS_DIR/client-cert.pem" -noout -subject -issuer -dates
-    
+    openssl x509 -in "$CLIENT_CERT" -noout -subject -issuer -dates
+
     # Проверка цепочки сертификатов
     echo ""
     info "Certificate chain verification:"
-    if openssl verify -CAfile "$CERTS_DIR/ca-cert.pem" "$CERTS_DIR/server-cert.pem" > /dev/null 2>&1; then
+    if openssl verify -CAfile "$CA_CERT" "$SERVER_CERT" > /dev/null 2>&1; then
         log "✓ Server certificate chain is valid"
     else
         error "✗ Server certificate chain is invalid"
     fi
-    
-    if openssl verify -CAfile "$CERTS_DIR/ca-cert.pem" "$CERTS_DIR/client-cert.pem" > /dev/null 2>&1; then
+
+    if openssl verify -CAfile "$CA_CERT" "$CLIENT_CERT" > /dev/null 2>&1; then
         log "✓ Client certificate chain is valid"
     else
         error "✗ Client certificate chain is invalid"
