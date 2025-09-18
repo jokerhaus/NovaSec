@@ -165,20 +165,24 @@ go test -v ./docker/ -run TestWazuhDockerfileValidation
 
 ### Примеры событий Wazuh (`internal/fixtures/wazuh_sample_events.jsonl`)
 
-1. **SSH неудачная попытка входа**
-   - Уровень: 7 (medium)
-   - Категория: authentication
-   - Подтип: ssh_login_failed
-
-2. **Файловая целостность - создание файла**
-   - Уровень: 3 (low)
-   - Категория: file_integrity
-   - Подтип: file_created
-
-3. **Высокий уровень серьезности - Brute Force**
-   - Уровень: 12 (critical)
-   - Категория: authentication
-   - Подтип: wazuh_event
+| #  | Уровень | Rule ID | Описание                                      | Категория         | Подтип             | Серьезность |
+|----|---------|---------|-----------------------------------------------|-------------------|--------------------|-------------|
+| 1  | 0       | 100001  | Agent connected to manager                    | system            | wazuh_event        | info        |
+| 2  | 1       | 100002  | Integrity check started                       | file_integrity    | wazuh_event        | info        |
+| 3  | 2       | 5715    | SSH login success                             | authentication    | ssh_login_success  | info        |
+| 4  | 3       | 554     | File added to the system                      | file_integrity    | file_created       | low         |
+| 5  | 4       | 555     | File modified on system                       | file_integrity    | file_modified      | low         |
+| 6  | 5       | 556     | Critical file deleted from system             | file_integrity    | file_deleted       | medium      |
+| 7  | 6       | 600     | User executed sudo command                    | authentication    | sudo_command       | medium      |
+| 8  | 7       | 5716    | SSH login failed                              | authentication    | ssh_login_failed   | medium      |
+| 9  | 8       | 650     | Firewall blocked suspicious connection        | network           | firewall_block     | high        |
+| 10 | 9       | 651     | Multiple outbound connection attempts detected| network           | network_connection | high        |
+| 11 | 10      | 700     | Malware detected in file upload               | malware           | malware_detected   | high        |
+| 12 | 11      | 800     | Windows logon failure event                   | windows           | windows_event      | high        |
+| 13 | 12      | 5717    | High number of failed login attempts          | authentication    | wazuh_event        | critical    |
+| 14 | 13      | 900     | Critical file tampering detected              | file_integrity    | file_integrity     | critical    |
+| 15 | 14      | 901     | Suspicious su command usage detected          | authentication    | su_command         | critical    |
+| 16 | 15      | 999     | Rootkit detected on system                    | malware           | wazuh_event        | critical    |
 
 ## Ожидаемые результаты
 

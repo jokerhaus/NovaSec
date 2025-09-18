@@ -1,5 +1,4 @@
-# configs/services.example.yml
-# Базовая конфигурация сервисов NovaSec для docker-compose окружения
+# Общая конфигурация для всех сервисов NovaSec
 
 nats:
   urls:

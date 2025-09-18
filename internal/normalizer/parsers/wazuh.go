@@ -261,20 +261,6 @@ func (p *WazuhParser) determineSubtype(wazuhEvent WazuhEvent) string {
 		return "su_command"
 	}
 
-	// Файловая целостность
-	if strings.Contains(description, "file") {
-		if strings.Contains(description, "modified") || strings.Contains(description, "changed") {
-			return "file_modified"
-		}
-		if strings.Contains(description, "created") || strings.Contains(description, "added") {
-			return "file_created"
-		}
-		if strings.Contains(description, "deleted") {
-			return "file_deleted"
-		}
-		return "file_integrity"
-	}
-
 	// Сеть
 	if strings.Contains(description, "firewall") || strings.Contains(description, "blocked") {
 		return "firewall_block"
@@ -287,6 +273,20 @@ func (p *WazuhParser) determineSubtype(wazuhEvent WazuhEvent) string {
 	// Malware
 	if strings.Contains(description, "malware") || strings.Contains(description, "virus") {
 		return "malware_detected"
+	}
+
+	// Файловая целостность
+	if strings.Contains(description, "file") {
+		if strings.Contains(description, "modified") || strings.Contains(description, "changed") {
+			return "file_modified"
+		}
+		if strings.Contains(description, "created") || strings.Contains(description, "added") {
+			return "file_created"
+		}
+		if strings.Contains(description, "deleted") {
+			return "file_deleted"
+		}
+		return "file_integrity"
 	}
 
 	// Windows события

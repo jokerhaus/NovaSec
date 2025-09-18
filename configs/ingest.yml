@@ -1,5 +1,4 @@
-# configs/ingest.example.yml
-# Базовая конфигурация NovaSec Ingest Service для docker-compose окружения
+# Конфигурация NovaSec Ingest Service
 
 server:
   host: "0.0.0.0"

@@ -2,6 +2,10 @@
 package parsers
 
 import (
+	"bufio"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +131,122 @@ func TestWazuhParser_ParseEvent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWazuhParser_ParseAllAlertSamples(t *testing.T) {
+	parser := NewWazuhParser()
+
+	fixturePath := filepath.Join("..", "..", "fixtures", "wazuh_sample_events.jsonl")
+	file, err := os.Open(fixturePath)
+	if err != nil {
+		t.Fatalf("failed to open Wazuh fixture: %v", err)
+	}
+	defer file.Close()
+
+	type expectedEvent struct {
+		Category string
+		Subtype  string
+		Severity string
+		Host     string
+		User     string
+		SrcIP    string
+		DstIP    string
+		FilePath string
+	}
+
+	expected := map[string]expectedEvent{
+		"5716":   {Category: "authentication", Subtype: "ssh_login_failed", Severity: "medium", Host: "test-agent", User: "admin", SrcIP: "192.168.1.200"},
+		"554":    {Category: "file_integrity", Subtype: "file_created", Severity: "low", Host: "test-agent", FilePath: "/etc/passwd"},
+		"5717":   {Category: "authentication", Subtype: "wazuh_event", Severity: "critical", Host: "test-agent", SrcIP: "192.168.1.200"},
+		"100001": {Category: "system", Subtype: "wazuh_event", Severity: "info", Host: "test-agent"},
+		"100002": {Category: "file_integrity", Subtype: "wazuh_event", Severity: "info", Host: "test-agent"},
+		"5715":   {Category: "authentication", Subtype: "ssh_login_success", Severity: "info", Host: "test-agent", User: "admin", SrcIP: "192.168.1.150"},
+		"555":    {Category: "file_integrity", Subtype: "file_modified", Severity: "low", Host: "test-agent", FilePath: "/etc/ssh/sshd_config"},
+		"556":    {Category: "file_integrity", Subtype: "file_deleted", Severity: "medium", Host: "test-agent", FilePath: "/etc/shadow"},
+		"600":    {Category: "authentication", Subtype: "sudo_command", Severity: "medium", Host: "test-agent", User: "admin"},
+		"650":    {Category: "network", Subtype: "firewall_block", Severity: "high", Host: "test-agent", SrcIP: "203.0.113.45", DstIP: "192.168.1.100"},
+		"651":    {Category: "network", Subtype: "network_connection", Severity: "high", Host: "test-agent", SrcIP: "192.168.1.100", DstIP: "198.51.100.10"},
+		"700":    {Category: "malware", Subtype: "malware_detected", Severity: "high", Host: "test-agent", FilePath: "/tmp/malicious.bin"},
+		"800":    {Category: "windows", Subtype: "windows_event", Severity: "high", Host: "win-agent", User: "Administrator", SrcIP: "10.0.0.5"},
+		"900":    {Category: "file_integrity", Subtype: "file_integrity", Severity: "critical", Host: "test-agent", FilePath: "/etc/sudoers"},
+		"901":    {Category: "authentication", Subtype: "su_command", Severity: "critical", Host: "test-agent", User: "service"},
+		"999":    {Category: "malware", Subtype: "wazuh_event", Severity: "critical", Host: "test-agent"},
+	}
+
+	seen := make(map[string]struct{})
+
+	scanner := bufio.NewScanner(file)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		raw := strings.TrimSpace(scanner.Text())
+		if raw == "" {
+			continue
+		}
+
+		rawEvent := &models.Event{
+			TS:   time.Now(),
+			Host: "fixture",
+			Raw:  raw,
+		}
+
+		normalized, err := parser.ParseEvent(rawEvent)
+		if err != nil {
+			t.Fatalf("failed to parse fixture line %d: %v", lineNumber, err)
+		}
+
+		ruleID := normalized.Labels["wazuh_rule_id"]
+		if ruleID == "" {
+			t.Fatalf("fixture line %d produced event without wazuh_rule_id label", lineNumber)
+		}
+
+		seen[ruleID] = struct{}{}
+
+		expectedEvent, ok := expected[ruleID]
+		if !ok {
+			t.Fatalf("unexpected rule id %s encountered at line %d", ruleID, lineNumber)
+		}
+
+		if normalized.Category != expectedEvent.Category {
+			t.Errorf("rule %s category = %s, want %s", ruleID, normalized.Category, expectedEvent.Category)
+		}
+
+		if normalized.Subtype != expectedEvent.Subtype {
+			t.Errorf("rule %s subtype = %s, want %s", ruleID, normalized.Subtype, expectedEvent.Subtype)
+		}
+
+		if normalized.Severity != expectedEvent.Severity {
+			t.Errorf("rule %s severity = %s, want %s", ruleID, normalized.Severity, expectedEvent.Severity)
+		}
+
+		if expectedEvent.Host != "" && normalized.Host != expectedEvent.Host {
+			t.Errorf("rule %s host = %s, want %s", ruleID, normalized.Host, expectedEvent.Host)
+		}
+
+		if expectedEvent.User != "" && normalized.UserName != expectedEvent.User {
+			t.Errorf("rule %s username = %s, want %s", ruleID, normalized.UserName, expectedEvent.User)
+		}
+
+		if expectedEvent.SrcIP != "" && normalized.SrcIP != expectedEvent.SrcIP {
+			t.Errorf("rule %s src_ip = %s, want %s", ruleID, normalized.SrcIP, expectedEvent.SrcIP)
+		}
+
+		if expectedEvent.DstIP != "" && normalized.DstIP != expectedEvent.DstIP {
+			t.Errorf("rule %s dst_ip = %s, want %s", ruleID, normalized.DstIP, expectedEvent.DstIP)
+		}
+
+		if expectedEvent.FilePath != "" && normalized.FilePath != expectedEvent.FilePath {
+			t.Errorf("rule %s file_path = %s, want %s", ruleID, normalized.FilePath, expectedEvent.FilePath)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("failed to scan Wazuh fixtures: %v", err)
+	}
+
+	if len(seen) != len(expected) {
+		t.Fatalf("parsed %d events, expected %d", len(seen), len(expected))
 	}
 }
 

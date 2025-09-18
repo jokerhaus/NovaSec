@@ -26,7 +26,7 @@ mkdir -p configs/tls
 mkdir -p backups
 
 # Generate TLS certificates
-if [ ! -f configs/tls/ca.crt ]; then
+if [ ! -f configs/tls/ca.crt ] && [ ! -f configs/tls/ca-cert.pem ]; then
     echo "Generating TLS certificates..."
     chmod +x scripts/gen-certs.sh
     ./scripts/gen-certs.sh

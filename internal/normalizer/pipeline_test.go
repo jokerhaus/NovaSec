@@ -2,12 +2,17 @@
 package normalizer
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"novasec/internal/common/logging"
+	"novasec/internal/models"
 )
 
 // createTestLogger создает logger для тестов
@@ -78,9 +83,105 @@ func TestNewPipeline(t *testing.T) {
 	}
 
 	// Проверяем, что парсеры инициализированы правильно
-	expectedParsers := 3 // LinuxAuthParser, NginxAccessParser, WindowsEventLogParser
+	expectedParsers := 4 // LinuxAuthParser, NginxAccessParser, WindowsEventLogParser, WazuhParser
 	if len(pipeline.parsers) != expectedParsers {
 		t.Errorf("Expected %d parsers, got %d", expectedParsers, len(pipeline.parsers))
+	}
+}
+
+func TestPipeline_NormalizeEventWazuh(t *testing.T) {
+	logger := createTestLogger(t)
+	config := createTestConfig()
+
+	pipeline := NewPipeline(config, logger, nil, nil)
+
+	fixturePath := filepath.Join("..", "fixtures", "wazuh_sample_events.jsonl")
+	file, err := os.Open(fixturePath)
+	if err != nil {
+		t.Fatalf("Failed to open Wazuh fixture: %v", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	if !scanner.Scan() {
+		t.Fatal("Failed to read Wazuh event from fixture")
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("Failed to scan Wazuh fixture: %v", err)
+	}
+
+	rawEventData := strings.TrimSpace(scanner.Text())
+
+	rawEvent := &models.Event{
+		Source: "wazuh",
+		Env:    "production",
+		Raw:    rawEventData,
+	}
+
+	normalizedEvent, err := pipeline.normalizeEvent(rawEvent)
+	if err != nil {
+		t.Fatalf("normalizeEvent returned error: %v", err)
+	}
+
+	if normalizedEvent == nil {
+		t.Fatal("normalizeEvent returned nil event")
+	}
+
+	if normalizedEvent.Host != "test-agent" {
+		t.Errorf("Unexpected host: got %s want %s", normalizedEvent.Host, "test-agent")
+	}
+
+	if normalizedEvent.AgentID != "001" {
+		t.Errorf("Unexpected agent ID: got %s want %s", normalizedEvent.AgentID, "001")
+	}
+
+	if normalizedEvent.Category != "authentication" {
+		t.Errorf("Unexpected category: got %s want %s", normalizedEvent.Category, "authentication")
+	}
+
+	if normalizedEvent.Subtype != "ssh_login_failed" {
+		t.Errorf("Unexpected subtype: got %s want %s", normalizedEvent.Subtype, "ssh_login_failed")
+	}
+
+	if normalizedEvent.Severity != "medium" {
+		t.Errorf("Unexpected severity: got %s want %s", normalizedEvent.Severity, "medium")
+	}
+
+	if normalizedEvent.Env != "production" {
+		t.Errorf("Unexpected environment: got %s want %s", normalizedEvent.Env, "production")
+	}
+
+	if normalizedEvent.TS.IsZero() {
+		t.Error("Normalized event timestamp should not be zero")
+	}
+
+	if normalizedEvent.Raw != rawEventData {
+		t.Error("Normalized event should retain raw payload")
+	}
+
+	if normalizedEvent.SrcIP != "192.168.1.200" {
+		t.Errorf("Unexpected source IP: got %s want %s", normalizedEvent.SrcIP, "192.168.1.200")
+	}
+
+	if normalizedEvent.Labels == nil {
+		t.Fatal("Normalized event labels should not be nil")
+	}
+
+	if value := normalizedEvent.Labels["wazuh_rule_id"]; value != "5716" {
+		t.Errorf("Unexpected wazuh_rule_id label: got %s want %s", value, "5716")
+	}
+
+	if value := normalizedEvent.Labels["parser"]; value != "wazuh" {
+		t.Errorf("Parser label not set correctly: got %s want %s", value, "wazuh")
+	}
+
+	if value := normalizedEvent.Labels["source"]; value != "wazuh" {
+		t.Errorf("Source label not set correctly: got %s want %s", value, "wazuh")
+	}
+
+	if value := normalizedEvent.Labels["environment"]; value != "production" {
+		t.Errorf("Environment label not set correctly: got %s want %s", value, "production")
 	}
 }
 

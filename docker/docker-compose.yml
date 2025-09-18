@@ -255,7 +255,7 @@ services:
 
   # Prometheus для метрик
   prometheus:
-    image: prom/prometheus:v2.47-alpine
+    image: prom/prometheus:v2.47.0
     container_name: novasec-prometheus
     ports:
       - "9090:9090"

@@ -203,6 +203,8 @@ curl -X POST http://localhost:8080/api/v1/events \
   -d @internal/fixtures/wazuh_sample_events.jsonl
 ```
 
+В файле `internal/fixtures/wazuh_sample_events.jsonl` собраны примеры для всех уровней тревог Wazuh (0–15). Это позволяет проверить обработку базовых уведомлений (agent keepalive, integrity check), событий аутентификации, сетевых инцидентов, обнаружения malware и критических алертов rootcheck на едином наборе данных.
+
 ## Правила корреляции для Wazuh
 
 ### SSH Brute Force Detection
