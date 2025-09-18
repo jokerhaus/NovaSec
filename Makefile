@@ -398,14 +398,24 @@ wazuh-send-test: ## Отправить тестовое событие Wazuh
 .PHONY: init
 init: ## Инициализировать проект
 	$(call log_info,"Инициализируем проект NovaSec...")
-	@cp configs/ingest.example.yml configs/ingest.yml
-	@cp configs/services.example.yml configs/services.yml
+	@if [ -f configs/ingest.yml ]; then \
+		echo -e "$(BLUE)[INFO]$(NC) configs/ingest.yml уже существует, пропускаем копирование"; \
+	else \
+		cp configs/ingest.example.yml configs/ingest.yml && \
+		echo -e "$(GREEN)[SUCCESS]$(NC) Создан configs/ingest.yml из примера"; \
+	fi
+	@if [ -f configs/services.yml ]; then \
+		echo -e "$(BLUE)[INFO]$(NC) configs/services.yml уже существует, пропускаем копирование"; \
+	else \
+		cp configs/services.example.yml configs/services.yml && \
+		echo -e "$(GREEN)[SUCCESS]$(NC) Создан configs/services.yml из примера"; \
+	fi
 	@chmod +x scripts/gen-certs.sh
 	@mkdir -p logs
 	@mkdir -p data
 	$(call log_success,"Проект инициализирован")
 	$(call log_info,"Следующие шаги:")
-	$(call log_info,"  1. Отредактируйте configs/*.yml")
+	$(call log_info,"  1. Отредактируйте configs/ingest.yml и configs/services.yml")
 	$(call log_info,"  2. Сгенерируйте сертификаты: make certs")
 	$(call log_info,"  3. Соберите сервисы: make build")
 	$(call log_info,"  4. Запустите: make run")
